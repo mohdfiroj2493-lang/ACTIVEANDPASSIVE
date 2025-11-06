@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List
 
 # ---------------------------------------------
 # CONSTANTS
@@ -61,12 +61,10 @@ class Profile:
             z_mid = 0.5 * (z[k] + z[k-1])
             i = self.layer_at_depth(z_mid)
             L = self.layers[i]
-
             if z_mid < self.water_table_depth:
                 gamma_eff = L.gamma_dry
             else:
                 gamma_eff = self.effective_gamma(L)
-
             running += gamma_eff * dz_loc
             sigma_v_eff[k] = running
             u[k] = GAMMA_W * max(0.0, z[k] - self.water_table_depth)
@@ -90,7 +88,6 @@ class Profile:
 # STREAMLIT APP
 # ---------------------------------------------
 st.set_page_config(page_title="Earth Pressure Diagram (English Units)", layout="wide")
-
 st.title("🧱 Active & Passive Earth Pressure Diagram (English Units)")
 st.markdown("### Rankine Theory with Cohesion, Dual Water Tables, and Excavation Depth")
 
@@ -131,39 +128,39 @@ if st.sidebar.button("Compute"):
         passive_adj[z >= excavation_depth] -= passive_adj[z == excavation_depth][0]
 
     # ---------------------------------------------
-    # DRAW FIGURE
+    # DRAW FIGURE (Active right, Passive left)
     # ---------------------------------------------
-    fig, ax = plt.subplots(figsize=(7, 8))
+    fig, ax = plt.subplots(figsize=(8, 8))
 
-    # Wall at center
-    ax.axvline(0, color='black', linewidth=5)
+    # WALL AT CENTER
+    ax.axvline(0, color="black", linewidth=5)
 
-    # Plot active (right side, blue)
-    ax.plot(resA["active"], z, color='blue', linewidth=2, label="Active Pressure")
-    ax.fill_betweenx(z, 0, resA["active"], color='lightblue', alpha=0.4)
+    # PASSIVE PRESSURE (LEFT SIDE)
+    ax.plot(-passive_adj, z, color="red", linewidth=2, label="Passive Pressure (Left Side)")
+    ax.fill_betweenx(z, 0, -passive_adj, color="salmon", alpha=0.4)
 
-    # Plot passive (left side, red)
-    ax.plot(passive_adj, z, color='red', linewidth=2, label="Passive Pressure")
-    ax.fill_betweenx(z, 0, passive_adj, color='salmon', alpha=0.4)
+    # ACTIVE PRESSURE (RIGHT SIDE)
+    ax.plot(resA["active"], z, color="blue", linewidth=2, label="Active Pressure (Right Side)")
+    ax.fill_betweenx(z, 0, resA["active"], color="lightblue", alpha=0.4)
 
-    # Excavation line
-    ax.axhline(excavation_depth, color="k", linestyle="--")
-    ax.text(max(resA["active"]) * 0.3, excavation_depth - 0.3,
-            f"Excavation (z={excavation_depth:.1f} ft)", fontsize=9, color="k")
-
-    # Add soil layers
+    # SOIL LAYER BOUNDARIES
     s = 0.0
     for i, L in enumerate(layers):
         s += L.thickness
         ax.axhline(s, color="k", linestyle="--", linewidth=0.8)
-        ax.text(max(resA["active"]) * 0.6, s - L.thickness/2,
+        ax.text(resA["active"].max() * 0.25, s - L.thickness/2,
                 f"Layer {i+1}\nφ={L.phi_deg}°\nγ={L.gamma_dry} pcf", fontsize=8)
 
-    # Formatting
+    # EXCAVATION LINE
+    ax.axhline(excavation_depth, color="k", linestyle="--", linewidth=1.2)
+    ax.text(0, excavation_depth - 0.4, f"Excavation (z={excavation_depth:.1f} ft)",
+            fontsize=9, ha="center", color="k")
+
+    # FORMATTING
     ax.invert_yaxis()
     ax.set_xlabel("Lateral Pressure (psf)")
     ax.set_ylabel("Depth (ft)")
-    ax.set_title("Active & Passive Earth Pressure Distribution (No Negative Values)")
+    ax.set_title("Active (Right) and Passive (Left) Earth Pressure Diagram (Positive Values Only)")
     ax.grid(True, linestyle="--", alpha=0.6)
     ax.legend(loc="upper right")
 
@@ -177,5 +174,4 @@ if st.sidebar.button("Compute"):
     st.write(f"**Water Table (Active):** {wt_active:.2f} ft")
     st.write(f"**Water Table (Passive):** {wt_passive:.2f} ft")
     st.write(f"**Excavation Depth:** {excavation_depth:.2f} ft")
-
-    st.success("✅ Computation and visualization complete (no negative signs shown).")
+    st.success("✅ Computation complete — active and passive shown on opposite sides (positive values only).")
