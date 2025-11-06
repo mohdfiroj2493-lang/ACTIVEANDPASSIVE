@@ -5,28 +5,22 @@ import math
 from dataclasses import dataclass, field
 from typing import List
 
-# ---------------------------------------------
-# CONSTANTS
-# ---------------------------------------------
-GAMMA_W = 62.4  # pcf (unit weight of water)
+GAMMA_W = 62.4  # pcf
 
-# ---------------------------------------------
-# DATA STRUCTURES
-# ---------------------------------------------
 @dataclass
 class SoilLayer:
-    thickness: float      # ft
-    phi_deg: float        # degrees
-    cohesion: float       # psf
-    gamma_dry: float      # pcf
-    gamma_sat: float      # pcf
+    thickness: float
+    phi_deg: float
+    cohesion: float
+    gamma_dry: float
+    gamma_sat: float
 
 
 @dataclass
 class Profile:
     layers: List[SoilLayer] = field(default_factory=list)
     water_table_depth: float = 0.0
-    dz: float = 0.1  # ft
+    dz: float = 0.1
 
     def total_depth(self):
         return sum(L.thickness for L in self.layers)
@@ -84,9 +78,7 @@ class Profile:
         return {"z": z, "active": sigma_h_a, "passive": sigma_h_p}
 
 
-# ---------------------------------------------
-# STREAMLIT APP
-# ---------------------------------------------
+# ---------------- Streamlit UI ----------------
 st.set_page_config(page_title="Earth Pressure Diagram (English Units)", layout="wide")
 st.title("🧱 Active & Passive Earth Pressure Diagram (English Units)")
 st.markdown("### Rankine Theory with Cohesion, Dual Water Tables, and Excavation Depth")
@@ -109,13 +101,10 @@ for i in range(int(num_layers)):
     gs = st.sidebar.number_input(f"γ_sat L{i+1} (pcf)", 60.0, 150.0, 120.0)
     layers.append(SoilLayer(t, phi, c, gd, gs))
 
-# ---------------------------------------------
-# COMPUTE AND PLOT
-# ---------------------------------------------
+# --------------- Computation ------------------
 if st.sidebar.button("Compute"):
     profA = Profile(layers=layers, water_table_depth=wt_active)
     profP = Profile(layers=layers, water_table_depth=wt_passive)
-
     resA = profA.compute()
     resP = profP.compute()
 
@@ -123,55 +112,57 @@ if st.sidebar.button("Compute"):
     H = profA.total_depth()
 
     passive_adj = np.copy(resP["passive"])
-    passive_adj[z < excavation_depth] = 0.0  # no passive above excavation
+    passive_adj[z < excavation_depth] = 0.0
     if any(z == excavation_depth):
         passive_adj[z >= excavation_depth] -= passive_adj[z == excavation_depth][0]
 
-    # ---------------------------------------------
-    # DRAW FIGURE (Active right, Passive left)
-    # ---------------------------------------------
+    # --------------- Plot ------------------
     fig, ax = plt.subplots(figsize=(8, 8))
-
-    # WALL AT CENTER
     ax.axvline(0, color="black", linewidth=5)
 
-    # PASSIVE PRESSURE (LEFT SIDE)
-    ax.plot(-passive_adj, z, color="red", linewidth=2, label="Passive Pressure (Left Side)")
+    # Passive (left)
+    ax.plot(-passive_adj, z, color="red", linewidth=2, label="Passive Pressure (Left)")
     ax.fill_betweenx(z, 0, -passive_adj, color="salmon", alpha=0.4)
 
-    # ACTIVE PRESSURE (RIGHT SIDE)
-    ax.plot(resA["active"], z, color="blue", linewidth=2, label="Active Pressure (Right Side)")
+    # Active (right)
+    ax.plot(resA["active"], z, color="blue", linewidth=2, label="Active Pressure (Right)")
     ax.fill_betweenx(z, 0, resA["active"], color="lightblue", alpha=0.4)
 
-    # SOIL LAYER BOUNDARIES
-    s = 0.0
-    for i, L in enumerate(layers):
-        s += L.thickness
-        ax.axhline(s, color="k", linestyle="--", linewidth=0.8)
-        ax.text(resA["active"].max() * 0.25, s - L.thickness/2,
-                f"Layer {i+1}\nφ={L.phi_deg}°\nγ={L.gamma_dry} pcf", fontsize=8)
-
-    # EXCAVATION LINE
+    # Excavation
     ax.axhline(excavation_depth, color="k", linestyle="--", linewidth=1.2)
     ax.text(0, excavation_depth - 0.4, f"Excavation (z={excavation_depth:.1f} ft)",
             fontsize=9, ha="center", color="k")
 
-    # FORMATTING
+    # Soil layers with detailed info
+    s = 0.0
+    x_text = max(resA["active"]) * 1.2
+    for i, L in enumerate(layers):
+        s += L.thickness
+        ax.axhline(s, color="k", linestyle="--", linewidth=0.8)
+        mid_depth = s - L.thickness / 2
+        ax.text(
+            x_text, mid_depth,
+            f"Layer {i+1}\n"
+            f"φ = {L.phi_deg:.1f}°\n"
+            f"c = {L.cohesion:.0f} psf\n"
+            f"γ_dry = {L.gamma_dry:.1f} pcf\n"
+            f"γ_sat = {L.gamma_sat:.1f} pcf",
+            fontsize=9, color="black", va="center", ha="left",
+            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none")
+        )
+
     ax.invert_yaxis()
     ax.set_xlabel("Lateral Pressure (psf)")
     ax.set_ylabel("Depth (ft)")
     ax.set_title("Active (Right) and Passive (Left) Earth Pressure Diagram (Positive Values Only)")
     ax.grid(True, linestyle="--", alpha=0.6)
     ax.legend(loc="upper right")
-
     st.pyplot(fig)
 
-    # ---------------------------------------------
-    # DISPLAY SUMMARY
-    # ---------------------------------------------
+    # --------------- Summary ------------------
     st.markdown("### Model Summary")
     st.write(f"**Total Height:** {H:.2f} ft")
     st.write(f"**Water Table (Active):** {wt_active:.2f} ft")
     st.write(f"**Water Table (Passive):** {wt_passive:.2f} ft")
     st.write(f"**Excavation Depth:** {excavation_depth:.2f} ft")
-    st.success("✅ Computation complete — active and passive shown on opposite sides (positive values only).")
+    st.success("✅ Computation complete — soil labels now include φ, c, γ_dry, and γ_sat.")
