@@ -5,14 +5,14 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
-# ----------------------------
+# ---------------------------------------------
 # CONSTANTS
-# ----------------------------
-GAMMA_W = 62.4  # pcf (unit weight of water, lb/ft³)
+# ---------------------------------------------
+GAMMA_W = 62.4  # pcf (unit weight of water)
 
-# ----------------------------
+# ---------------------------------------------
 # DATA STRUCTURES
-# ----------------------------
+# ---------------------------------------------
 @dataclass
 class SoilLayer:
     thickness: float      # ft
@@ -20,6 +20,7 @@ class SoilLayer:
     cohesion: float       # psf
     gamma_dry: float      # pcf
     gamma_sat: float      # pcf
+
 
 @dataclass
 class Profile:
@@ -83,32 +84,38 @@ class Profile:
 
         return {"z": z, "active": sigma_h_a, "passive": sigma_h_p}
 
-# ----------------------------
-# STREAMLIT APP
-# ----------------------------
-st.set_page_config(page_title="Earth Pressure (English Units)", layout="wide")
-st.title("🧱 Active & Passive Earth Pressure (English Units)")
 
-st.sidebar.header("Soil and Water Parameters")
+# ---------------------------------------------
+# STREAMLIT APP
+# ---------------------------------------------
+st.set_page_config(page_title="Earth Pressure (English Units)", layout="wide")
+
+st.title("🧱 Active & Passive Earth Pressure Calculator (English Units)")
+st.markdown("### Rankine Theory with Cohesion, Dual Water Tables, and Excavation Depth")
+
+st.sidebar.header("Soil and Geometry Parameters")
 
 num_layers = st.sidebar.number_input("Number of soil layers", 1, 10, 3)
-wt_active = st.sidebar.number_input("Water Table Depth (Active Side, ft)", 0.0, 50.0, 5.0, step=0.5)
-wt_passive = st.sidebar.number_input("Water Table Depth (Passive Side, ft)", 0.0, 50.0, 8.0, step=0.5)
-excavation_depth = st.sidebar.number_input("Excavation Depth (Passive Side, ft)", 0.0, 50.0, 3.0, step=0.5)
+wt_active = st.sidebar.number_input("Water Table Depth (Active Side, ft)", 0.0, 100.0, 5.0, step=0.5)
+wt_passive = st.sidebar.number_input("Water Table Depth (Passive Side, ft)", 0.0, 100.0, 8.0, step=0.5)
+excavation_depth = st.sidebar.number_input("Excavation Depth (Passive Side, ft)", 0.0, 100.0, 10.0, step=0.5)
 
 active_layers, passive_layers = [], []
 
-st.sidebar.markdown("### Active Side Layers")
+st.sidebar.markdown("### Soil Layer Properties")
 for i in range(int(num_layers)):
     st.sidebar.markdown(f"**Layer {i+1}**")
-    t = st.sidebar.number_input(f"Thickness L{i+1} (ft)", 0.1, 50.0, 3.0)
+    t = st.sidebar.number_input(f"Thickness L{i+1} (ft)", 0.1, 100.0, 5.0)
     phi = st.sidebar.number_input(f"φ L{i+1} (°)", 0.0, 50.0, 30.0)
-    c = st.sidebar.number_input(f"c L{i+1} (psf)", 0.0, 2000.0, 0.0)
-    gd = st.sidebar.number_input(f"γ_dry L{i+1} (pcf)", 60.0, 140.0, 110.0)
-    gs = st.sidebar.number_input(f"γ_sat L{i+1} (pcf)", 60.0, 140.0, 120.0)
+    c = st.sidebar.number_input(f"c L{i+1} (psf)", 0.0, 5000.0, 0.0)
+    gd = st.sidebar.number_input(f"γ_dry L{i+1} (pcf)", 60.0, 150.0, 110.0)
+    gs = st.sidebar.number_input(f"γ_sat L{i+1} (pcf)", 60.0, 150.0, 120.0)
     active_layers.append(SoilLayer(t, phi, c, gd, gs))
-    passive_layers.append(SoilLayer(t, phi, c, gd, gs))  # for now identical
+    passive_layers.append(SoilLayer(t, phi, c, gd, gs))  # identical for now
 
+# ---------------------------------------------
+# COMPUTATION AND PLOTTING
+# ---------------------------------------------
 if st.sidebar.button("Compute"):
     prof_active = Profile(layers=active_layers, water_table_depth=wt_active)
     prof_passive = Profile(layers=passive_layers, water_table_depth=wt_passive)
@@ -116,30 +123,43 @@ if st.sidebar.button("Compute"):
     resP = prof_passive.compute()
 
     z = resA["z"]
+    H = prof_active.total_depth()
+
+    # --- ADJUST PASSIVE PRESSURE FOR EXCAVATION ---
+    passive_adj = np.copy(resP["passive"])
+    passive_adj[z < excavation_depth] = 0.0  # no passive above excavation
+    # shift so pressure starts from 0 at excavation
+    passive_adj[z >= excavation_depth] -= passive_adj[z == excavation_depth][0] if any(z == excavation_depth) else 0.0
+
+    # --- PLOT ---
     fig, ax = plt.subplots(figsize=(7, 8))
 
-    # Plot pressures on both sides
+    # Pressure diagrams
     ax.plot(-resA["active"], z, color="blue", label="Active Pressure (left)")
-    ax.plot(resP["passive"], z, color="red", label="Passive Pressure (right)")
+    ax.plot(passive_adj, z, color="red", label="Passive Pressure (right)")
 
-    # Draw wall and excavation line
+    # Shading
+    ax.fill_betweenx(z, -resA["active"], 0, where=(-resA["active"] < 0), color="lightblue", alpha=0.3)
+    ax.fill_betweenx(z, 0, passive_adj, where=(passive_adj > 0), color="salmon", alpha=0.3)
+
+    # Wall line
     ax.axvline(0, color="black", linewidth=3)
-    ax.fill_betweenx(z, -resA["active"], 0, color="lightblue", alpha=0.3)
-    ax.fill_betweenx(z, 0, resP["passive"], color="salmon", alpha=0.3)
 
-    # Show excavation line
-    ax.plot([0, 5], [excavation_depth, excavation_depth], "k--", linewidth=1)
+    # Excavation line
+    ax.axhline(excavation_depth, color="k", linestyle="--", linewidth=1)
+    ax.text(50, excavation_depth - 0.5, f"Excavation (z={excavation_depth:.1f} ft)", fontsize=9, color="k")
 
     ax.invert_yaxis()
     ax.set_xlabel("Lateral Pressure (psf)")
     ax.set_ylabel("Depth (ft)")
-    ax.set_title("Active & Passive Earth Pressure Distribution")
-    ax.legend()
+    ax.set_title("Active & Passive Earth Pressure Distribution (with Excavation)")
     ax.grid(True)
+    ax.legend()
     st.pyplot(fig)
 
+    # --- Summary Info ---
     st.markdown("### Model Geometry Overview")
-    st.markdown(f"- Total height = **{prof_active.total_depth():.2f} ft**")
-    st.markdown(f"- Water table (active) = **{wt_active:.2f} ft**, (passive) = **{wt_passive:.2f} ft**")
-    st.markdown(f"- Excavation depth = **{excavation_depth:.2f} ft**")
-    st.success("✅ Computation complete and visualized.")
+    st.markdown(f"- Total wall height = **{H:.2f} ft**")
+    st.markdown(f"- Excavation depth (passive starts here) = **{excavation_depth:.2f} ft**")
+    st.markdown(f"- Water table depth: active = **{wt_active:.2f} ft**, passive = **{wt_passive:.2f} ft**")
+    st.success("✅ Computation complete and visualization updated.")
