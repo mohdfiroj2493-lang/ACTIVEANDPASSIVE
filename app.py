@@ -257,10 +257,10 @@ pa_coulomb_net = np.clip(pa_coulomb, 0, None)
 
 # Resultant forces (trapz integration)
 def resultant(p, z):
-    F = np.trapz(p, z)
+    F = np.trapezoid(p, z)
     if F <= 0:
         return 0.0, H / 3
-    moment = np.trapz(p * (max(z) - z), z)
+    moment = np.trapezoid(p * (max(z) - z), z)
     h_bar = moment / F
     return F, h_bar
 
