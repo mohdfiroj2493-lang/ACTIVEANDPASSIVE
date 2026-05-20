@@ -404,14 +404,17 @@ for i, z in enumerate(depths):
     phi_arr[i] = phi_i
     c_arr[i] = c_i
     Ka_r[i] = rankine_Ka(phi_i, beta)
-    Kp_r[i] = rankine_Kp(phi_i, beta)
     Ka_c[i] = coulomb_Ka(phi_i, delta, alpha, beta)
-    Kp_c[i] = coulomb_Kp(phi_i, delta, alpha, beta)
     K0_arr[i] = K0(phi_i, beta)
 
-# Replace invalid Coulomb values with Rankine fallback so the app does not crash.
+# Replace invalid Coulomb active values with Rankine fallback so the app does not crash.
 Ka_c = np.where(np.isfinite(Ka_c), Ka_c, Ka_r)
-Kp_c = np.where(np.isfinite(Kp_c), Kp_c, Kp_r)
+
+# Passive pressure in this app is calculated using the inverse of the active coefficient.
+# This keeps the relationship Kp = 1 / Ka, so when c = 0 and no water is present:
+# passive pressure = vertical effective stress / Ka.
+Kp_r = np.where(Ka_r > 0, 1.0 / Ka_r, np.nan)
+Kp_c = np.where(Ka_c > 0, 1.0 / Ka_c, Kp_r)
 
 # Surcharge is calculated separately from earth/water pressure.
 selected_Q = Q_line if surcharge_type == "Line Load" else Q_point
