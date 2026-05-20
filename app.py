@@ -49,6 +49,17 @@ with st.sidebar:
     beta_deg = st.number_input("Backfill Slope β (°)", 0.0, 30.0, 0.0, 1.0)
     delta_deg = st.number_input("Wall Friction δ (°), for Coulomb", 0.0, 35.0, 15.0, 1.0)
 
+    st.subheader("🟫 Passive Pressure Zone")
+    passive_start_depth = st.number_input(
+        "Passive Pressure Start Depth from Top (ft)",
+        min_value=0.0,
+        max_value=float(H),
+        value=0.0,
+        step=0.5,
+        format="%.2f",
+        help="Passive resistance is set to zero above this depth. Below this depth, passive pressure is calculated using depth measured from this point."
+    )
+
     st.subheader("💧 Groundwater")
     include_water = st.checkbox("Include water table", True)
     water_table = st.number_input("Water Table Depth from Top (ft)", 0.0, float(H), min(10.0, float(H)), 0.5)
@@ -262,7 +273,7 @@ def properties_at_depth(z):
 
 
 def vertical_stresses_at_depth(z):
-    """Returns total vertical stress, pore pressure, and effective vertical stress at depth z."""
+    """Returns total vertical stress, pore pressure, and effective vertical stress at depth z from the top of the wall."""
     if z <= 0:
         return 0.0, 0.0, 0.0
 
@@ -293,6 +304,28 @@ def vertical_stresses_at_depth(z):
     u = gamma_w * max(0.0, z - water_table) if include_water else 0.0
     effective = max(total - u, 0.0)
     return total, u, effective
+
+
+def vertical_stresses_between_depths(z_top, z_bot):
+    """Returns total, pore pressure, and effective vertical stress for the soil column between z_top and z_bot.
+
+    This is used for passive pressure when passive resistance starts below the wall top,
+    such as at an excavation subgrade/dredge line.
+    """
+    if z_bot <= z_top:
+        return 0.0, 0.0, 0.0
+    total_bot, _, _ = vertical_stresses_at_depth(z_bot)
+    total_top, _, _ = vertical_stresses_at_depth(z_top)
+    total_increment = max(total_bot - total_top, 0.0)
+
+    if include_water:
+        effective_water_table = max(float(water_table), float(z_top))
+        u_increment = gamma_w * max(0.0, z_bot - effective_water_table)
+    else:
+        u_increment = 0.0
+
+    effective_increment = max(total_increment - u_increment, 0.0)
+    return total_increment, u_increment, effective_increment
 
 
 def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None):
@@ -326,6 +359,9 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None):
 sigma_v_total = np.zeros_like(depths)
 u_water = np.zeros_like(depths)
 sigma_v_eff = np.zeros_like(depths)
+sigma_v_total_passive = np.zeros_like(depths)
+u_water_passive = np.zeros_like(depths)
+sigma_v_eff_passive = np.zeros_like(depths)
 phi_arr = np.zeros_like(depths)
 c_arr = np.zeros_like(depths)
 Ka_r = np.zeros_like(depths)
@@ -336,6 +372,7 @@ K0_arr = np.zeros_like(depths)
 
 for i, z in enumerate(depths):
     sigma_v_total[i], u_water[i], sigma_v_eff[i] = vertical_stresses_at_depth(z)
+    sigma_v_total_passive[i], u_water_passive[i], sigma_v_eff_passive[i] = vertical_stresses_between_depths(passive_start_depth, z)
     phi_i, c_i = properties_at_depth(z)
     phi_arr[i] = phi_i
     c_arr[i] = c_i
@@ -368,15 +405,27 @@ pa_rankine_eff_net = np.clip(pa_rankine_eff, 0, None)
 pa_coulomb_eff_net = np.clip(pa_coulomb_eff, 0, None)
 pa_atrest_eff_net = np.clip(pa_atrest_eff, 0, None)
 
-pp_rankine_eff = Kp_r * sigma_v_eff + 2 * c_arr * safe_sqrt(Kp_r) + (Kp_r * q_uniform if surcharge_type == "Uniform" else 0)
-pp_coulomb_eff = Kp_c * sigma_v_eff + 2 * c_arr * safe_sqrt(Kp_c) + (Kp_c * q_uniform if surcharge_type == "Uniform" else 0)
+passive_mask = depths >= passive_start_depth
+passive_surcharge_r = np.where(passive_mask, (Kp_r * q_uniform if surcharge_type == "Uniform" else 0), 0.0)
+passive_surcharge_c = np.where(passive_mask, (Kp_c * q_uniform if surcharge_type == "Uniform" else 0), 0.0)
+pp_rankine_eff = np.where(
+    passive_mask,
+    Kp_r * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_r) + passive_surcharge_r,
+    0.0
+)
+pp_coulomb_eff = np.where(
+    passive_mask,
+    Kp_c * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_c) + passive_surcharge_c,
+    0.0
+)
 
 water_component = u_water if show_total_pressure else 0.0
+passive_water_component = u_water_passive if show_total_pressure else 0.0
 pa_rankine = pa_rankine_eff_net + water_component
 pa_coulomb = pa_coulomb_eff_net + water_component
 pa_atrest = pa_atrest_eff_net + water_component
-pp_rankine = pp_rankine_eff + water_component
-pp_coulomb = pp_coulomb_eff + water_component
+pp_rankine = pp_rankine_eff + passive_water_component
+pp_coulomb = pp_coulomb_eff + passive_water_component
 
 
 def resultant(p, z):
@@ -425,6 +474,7 @@ with tab1:
         <div class="result-card"><span class="method-badge coulomb">Coulomb</span><h4>F<sub>p</sub> = {Fp_c:.2f} kips/ft</h4><p style="margin:0;font-size:0.85rem;">Acts at <b>{hp_c:.2f} ft</b> above base</p></div>
         """, unsafe_allow_html=True)
 
+        st.markdown(f"<div class='note'>Passive pressure is calculated only below <b>{passive_start_depth:.2f} ft</b> from the top.</div>", unsafe_allow_html=True)
         if include_water:
             st.markdown(f"<div class='note'>Water pressure is added below <b>{water_table:.2f} ft</b> when total pressure is shown.</div>", unsafe_allow_html=True)
 
@@ -444,6 +494,8 @@ with tab1:
             ax.plot(-pa, depths, color=c_a, lw=2.2, label="Active")
             for b in layer_df["Bottom Depth (ft)"].iloc[:-1]:
                 ax.axhline(b, color="#64748b", lw=0.8, ls="--", alpha=0.6)
+            if passive_start_depth > 0:
+                ax.axhline(passive_start_depth, color="#92400e", lw=1.2, ls="-.", alpha=0.9)
             if include_water:
                 ax.axhline(water_table, color="#0ea5e9", lw=1.2, ls=":", alpha=0.9)
             ax.axvline(0, color="#334155", lw=0.8)
@@ -498,6 +550,7 @@ with tab3:
 - Above the water table it uses moist unit weight, γm.
 - Below the water table it uses saturated unit weight, γsat, computes pore pressure, then uses effective vertical stress for soil pressure.
 - Total lateral pressure = effective lateral soil pressure + water pressure.
+- Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
 
 ### English-unit conventions
@@ -539,6 +592,7 @@ with tab4:
         "σv total (psf)": np.round(sigma_v_total[idx], 1),
         "u water (psf)": np.round(u_water[idx], 1),
         "σv effective (psf)": np.round(sigma_v_eff[idx], 1),
+        "Passive σv effective from start (psf)": np.round(sigma_v_eff_passive[idx], 1),
         "Ka Rankine": np.round(Ka_r[idx], 3),
         "Ka Coulomb": np.round(Ka_c[idx], 3),
         "Rankine active total (psf)": np.round(pa_rankine[idx], 1),
