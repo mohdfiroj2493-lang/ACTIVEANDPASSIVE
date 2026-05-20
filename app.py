@@ -24,6 +24,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------
+# Soil layer table defaults
+# -----------------------------
+def default_layers(n, height):
+    bottoms = np.linspace(height / n, height, n)
+    return pd.DataFrame({
+        "Bottom Depth (ft)": np.round(bottoms, 2),
+        "Moist Unit Weight γm (pcf)": [120.0] * n,
+        "Saturated Unit Weight γsat (pcf)": [125.0] * n,
+        "Friction Angle φ (deg)": [30.0] * n,
+        "Cohesion c (psf)": [0.0] * n,
+    })
+
+# -----------------------------
 # Sidebar inputs
 # -----------------------------
 with st.sidebar:
@@ -41,8 +54,23 @@ with st.sidebar:
     water_table = st.number_input("Water Table Depth from Top (ft)", 0.0, float(H), min(10.0, float(H)), 0.5)
     gamma_w = st.number_input("Unit Weight of Water γw (pcf)", 60.0, 64.0, 62.4, 0.1)
 
-    st.subheader("🪨 Soil Layers")
+    st.subheader("🪨 Soil Properties / Layers")
     n_soil_layers = st.number_input("Number of Soil Layers", 1, 8, 3, 1)
+    st.caption("Depths are measured downward from the retained ground surface. Set the last bottom depth to the wall height.")
+
+    layer_df = st.data_editor(
+        default_layers(int(n_soil_layers), float(H)),
+        num_rows="fixed",
+        use_container_width=True,
+        key="soil_layer_editor",
+        column_config={
+            "Bottom Depth (ft)": st.column_config.NumberColumn(min_value=0.1, max_value=float(H), step=0.5),
+            "Moist Unit Weight γm (pcf)": st.column_config.NumberColumn(min_value=50.0, max_value=160.0, step=1.0),
+            "Saturated Unit Weight γsat (pcf)": st.column_config.NumberColumn(min_value=50.0, max_value=170.0, step=1.0),
+            "Friction Angle φ (deg)": st.column_config.NumberColumn(min_value=0.0, max_value=50.0, step=1.0),
+            "Cohesion c (psf)": st.column_config.NumberColumn(min_value=0.0, max_value=5000.0, step=50.0),
+        },
+    )
 
     st.subheader("📦 Surcharge")
     surcharge_type = st.selectbox("Surcharge Type", ["None", "Uniform", "Line Load", "Point Load"])
@@ -67,34 +95,8 @@ with st.sidebar:
     show_total_pressure = st.checkbox("Show total pressure including water", True)
 
 # -----------------------------
-# Soil layer table
+# Soil layer cleanup
 # -----------------------------
-def default_layers(n, height):
-    bottoms = np.linspace(height / n, height, n)
-    return pd.DataFrame({
-        "Bottom Depth (ft)": np.round(bottoms, 2),
-        "Moist Unit Weight γm (pcf)": [120.0] * n,
-        "Saturated Unit Weight γsat (pcf)": [125.0] * n,
-        "Friction Angle φ (deg)": [30.0] * n,
-        "Cohesion c (psf)": [0.0] * n,
-    })
-
-st.subheader("🪨 Soil Layer Input")
-st.caption("Depth is measured downward from the retained ground surface. Last layer bottom should be equal to wall height.")
-
-layer_df = st.data_editor(
-    default_layers(int(n_soil_layers), float(H)),
-    num_rows="fixed",
-    use_container_width=True,
-    column_config={
-        "Bottom Depth (ft)": st.column_config.NumberColumn(min_value=0.1, max_value=float(H), step=0.5),
-        "Moist Unit Weight γm (pcf)": st.column_config.NumberColumn(min_value=50.0, max_value=160.0, step=1.0),
-        "Saturated Unit Weight γsat (pcf)": st.column_config.NumberColumn(min_value=50.0, max_value=170.0, step=1.0),
-        "Friction Angle φ (deg)": st.column_config.NumberColumn(min_value=0.0, max_value=50.0, step=1.0),
-        "Cohesion c (psf)": st.column_config.NumberColumn(min_value=0.0, max_value=5000.0, step=50.0),
-    },
-)
-
 layer_df = layer_df.sort_values("Bottom Depth (ft)").reset_index(drop=True)
 if layer_df.iloc[-1]["Bottom Depth (ft)"] < H:
     st.warning("The last soil layer bottom is less than the wall height. The app will extend the last layer to the wall base.")
