@@ -484,12 +484,156 @@ Ft_0, ht_0 = resultant(pa_atrest_plus_surcharge, depths)
 Fp_r, hp_r = resultant(pp_rankine, depths)
 Fp_c, hp_c = resultant(pp_coulomb, depths)
 
+
+
+# -----------------------------
+# Input geometry schematic
+# -----------------------------
+def create_geometry_figure():
+    """Creates a schematic based on the current input geometry, layers, water table, passive zone, and surcharge."""
+    fig, ax = plt.subplots(figsize=(11, 6.5))
+    fig.patch.set_facecolor("#f8fafc")
+    ax.set_facecolor("#f8fafc")
+
+    h = float(H)
+    tan_alpha = np.tan(alpha)
+    tan_beta = np.tan(beta)
+    wall_x_top = 0.0
+    wall_x_bottom = h * tan_alpha
+
+    max_surcharge_x = 0.0
+    if surcharge_type == "Line Load":
+        max_surcharge_x = float(x_line)
+    elif surcharge_type == "Point Load":
+        max_surcharge_x = float(x_point)
+    elif surcharge_type == "Strip Load":
+        max_surcharge_x = float(x_strip_near) + float(strip_width)
+
+    x_right = max(h * 1.25, max_surcharge_x + h * 0.25, 20.0)
+    y_surface_right = -x_right * tan_beta
+    y_top = min(-2.0, y_surface_right - 2.0)
+    y_bottom = h + max(2.0, 0.08 * h)
+
+    # Soil mass behind the wall.
+    wall_x = np.array([wall_x_top, wall_x_bottom])
+    wall_y = np.array([0.0, h])
+    soil_poly_x = [wall_x_top, x_right, x_right, wall_x_bottom]
+    soil_poly_y = [0.0, y_surface_right, h, h]
+    ax.fill(soil_poly_x, soil_poly_y, color="#d97706", alpha=0.12, label="Backfill soil")
+
+    # Excavation/front side of wall.
+    ax.fill_betweenx([0, h], -0.8 * h, wall_x, color="#e2e8f0", alpha=0.55, label="Wall front side")
+
+    # Wall line and thickness.
+    ax.plot(wall_x, wall_y, color="#334155", lw=5, solid_capstyle="round", label="Wall")
+    ax.plot(wall_x - 0.25, wall_y, color="#94a3b8", lw=5, alpha=0.9)
+
+    # Backfill surface.
+    ax.plot([0, x_right], [0, y_surface_right], color="#78350f", lw=2.5, label=f"Backfill slope β = {beta_deg:.2f}°")
+
+    # Layer boundaries and labels.
+    top_depth = 0.0
+    layer_colors = ["#fef3c7", "#fde68a", "#fed7aa", "#fdba74", "#fcd34d", "#fbbf24", "#f59e0b", "#d97706"]
+    for i, row in layer_df.iterrows():
+        bottom_depth = min(float(row["Bottom Depth (ft)"]), h)
+        if bottom_depth <= top_depth:
+            continue
+        # Fill each horizontal layer slice behind the wall.
+        y1, y2 = top_depth, bottom_depth
+        x_wall_y1 = y1 * tan_alpha
+        x_wall_y2 = y2 * tan_alpha
+        ax.fill([x_wall_y1, x_right, x_right, x_wall_y2], [y1, y1 - x_right * 0.0, y2, y2],
+                color=layer_colors[i % len(layer_colors)], alpha=0.10)
+        if bottom_depth < h:
+            ax.hlines(bottom_depth, xmin=bottom_depth * tan_alpha, xmax=x_right,
+                      colors="#64748b", linestyles="--", lw=1.0)
+        mid = 0.5 * (top_depth + bottom_depth)
+        ax.text(x_right * 0.72, mid, f"Layer {i + 1}\nφ={float(row['Friction Angle φ (deg)']):.0f}°, c={float(row['Cohesion c (psf)']):.0f} psf",
+                fontsize=8, color="#334155", ha="left", va="center",
+                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#cbd5e1", alpha=0.75))
+        top_depth = bottom_depth
+
+    # Water table.
+    if include_water:
+        ax.hlines(float(water_table), xmin=float(water_table) * tan_alpha, xmax=x_right,
+                  colors="#0284c7", linestyles=":", lw=2.0, label=f"Water table = {water_table:.2f} ft")
+        ax.text(x_right * 0.04 + float(water_table) * tan_alpha, float(water_table) - 0.35,
+                f"WT {water_table:.2f} ft", color="#0284c7", fontsize=9, fontweight="bold")
+        ax.fill_between([float(water_table) * tan_alpha, x_right], float(water_table), h,
+                        color="#38bdf8", alpha=0.10)
+
+    # Passive start depth.
+    if passive_start_depth > 0:
+        ax.hlines(float(passive_start_depth), xmin=-0.35 * h, xmax=x_right * 0.18,
+                  colors="#92400e", linestyles="-.", lw=2.0, label=f"Passive starts = {passive_start_depth:.2f} ft")
+        ax.text(-0.35 * h, float(passive_start_depth) - 0.3,
+                f"Passive starts\n{passive_start_depth:.2f} ft", color="#92400e", fontsize=8,
+                ha="left", va="bottom", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#f59e0b", alpha=0.85))
+
+    # Surcharge geometry.
+    if surcharge_type == "Uniform":
+        xs = np.linspace(1.0, min(x_right - 1.0, h), 5)
+        for x in xs:
+            y = -x * tan_beta
+            ax.annotate("", xy=(x, y + 0.1), xytext=(x, y - 1.6),
+                        arrowprops=dict(arrowstyle="-|>", color="#dc2626", lw=1.8))
+        ax.text(min(x_right * 0.18, h), y_top + 0.5, f"Uniform surcharge q = {q_uniform:.0f} psf",
+                color="#dc2626", fontsize=9, fontweight="bold")
+    elif surcharge_type == "Line Load":
+        x = float(x_line)
+        y = -x * tan_beta
+        ax.annotate("", xy=(x, y + 0.1), xytext=(x, y - 2.6),
+                    arrowprops=dict(arrowstyle="-|>", color="#dc2626", lw=2.2))
+        ax.text(x, y - 2.9, f"Line load\nQ={Q_line:.0f} lb/ft\nx={x_line:.2f} ft", color="#dc2626",
+                fontsize=9, ha="center", va="top", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#fecaca", alpha=0.9))
+    elif surcharge_type == "Point Load":
+        x = float(x_point)
+        y = -x * tan_beta
+        ax.annotate("", xy=(x, y + 0.1), xytext=(x, y - 2.6),
+                    arrowprops=dict(arrowstyle="-|>", color="#dc2626", lw=2.2))
+        ax.text(x, y - 2.9, f"Point load\nQ={Q_point:.0f} lb\nx={x_point:.2f} ft", color="#dc2626",
+                fontsize=9, ha="center", va="top", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#fecaca", alpha=0.9))
+    elif surcharge_type == "Strip Load":
+        x1 = float(x_strip_near)
+        x2 = float(x_strip_near + strip_width)
+        y1 = -x1 * tan_beta
+        y2 = -x2 * tan_beta
+        ax.plot([x1, x2], [y1, y2], color="#dc2626", lw=5, solid_capstyle="butt")
+        for x in np.linspace(x1, x2, 5):
+            y = -x * tan_beta
+            ax.annotate("", xy=(x, y + 0.1), xytext=(x, y - 1.5),
+                        arrowprops=dict(arrowstyle="-|>", color="#dc2626", lw=1.6))
+        ax.text((x1 + x2) / 2.0, min(y1, y2) - 2.0,
+                f"Strip load q={q_strip:.0f} psf\nx1={x1:.2f} ft, B={strip_width:.2f} ft",
+                color="#dc2626", fontsize=9, ha="center", va="top",
+                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#fecaca", alpha=0.9))
+
+    # Dimension arrows for wall height.
+    ax.annotate("", xy=(-1.2, 0), xytext=(-1.2, h),
+                arrowprops=dict(arrowstyle="<->", color="#0f172a", lw=1.2))
+    ax.text(-1.6, h / 2.0, f"H = {h:.2f} ft", rotation=90, ha="center", va="center", fontsize=9, color="#0f172a")
+
+    ax.set_title("Input Geometry Schematic", fontsize=13, fontweight="bold", color="#1a3a5c")
+    ax.set_xlabel("Horizontal distance from wall top (ft)")
+    ax.set_ylabel("Depth from top (ft)")
+    ax.set_xlim(-0.45 * h, x_right)
+    ax.set_ylim(y_bottom, y_top)
+    ax.grid(True, alpha=0.25, linestyle="--")
+    ax.legend(loc="lower right", fontsize=8)
+    fig.tight_layout()
+    return fig
+
 # -----------------------------
 # Results UI
 # -----------------------------
 tab1, tab2, tab3, tab4 = st.tabs(["📐 Results & Diagrams", "📊 Comparison Charts", "📋 Formulas & Notes", "🔢 Detailed Tables"])
 
 with tab1:
+    st.subheader("Input Geometry Based on Current Parameters")
+    fig_geo = create_geometry_figure()
+    st.pyplot(fig_geo)
+    plt.close(fig_geo)
+
     col_res, col_diag = st.columns([1, 1.6])
     with col_res:
         st.subheader("Layer Summary")
