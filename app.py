@@ -164,21 +164,32 @@ with st.sidebar:
     layer_df = pd.DataFrame(updated_layers)
 
     st.subheader("📦 Surcharge")
-    surcharge_type = st.selectbox("Surcharge Type", ["None", "Uniform", "Line Load", "Point Load"])
+    surcharge_type = st.selectbox("Surcharge Type", ["None", "Uniform", "Line Load", "Point Load", "Strip Load"])
     q_uniform = 0.0
     Q_line = 0.0
     x_line = 5.0
     Q_point = 0.0
     x_point = 5.0
+    q_strip = 0.0
+    x_strip_near = 2.0
+    strip_width = 10.0
 
     if surcharge_type == "Uniform":
         q_uniform = st.number_input("Uniform Surcharge q (psf)", 0.0, 10000.0, 250.0, 25.0)
+        st.caption("Calculated separately as Δp = K × q.")
     elif surcharge_type == "Line Load":
         Q_line = st.number_input("Line Load Q (lb/ft)", 0.0, 50000.0, 2000.0, 100.0)
         x_line = st.number_input("Distance from Wall x (ft)", 0.5, 100.0, 6.0, 0.5)
+        st.caption("Calculated separately using the NAVFAC/Boussinesq wall-pressure equation.")
     elif surcharge_type == "Point Load":
         Q_point = st.number_input("Point Load Q (lb)", 0.0, 200000.0, 10000.0, 500.0)
         x_point = st.number_input("Distance from Wall x (ft)", 0.5, 100.0, 6.0, 0.5)
+        st.caption("Calculated separately using the NAVFAC/Boussinesq wall-pressure equation.")
+    elif surcharge_type == "Strip Load":
+        q_strip = st.number_input("Strip Load q (psf)", 0.0, 10000.0, 600.0, 25.0)
+        x_strip_near = st.number_input("Distance to Near Edge x1 (ft)", 0.0, 200.0, 2.0, 0.5)
+        strip_width = st.number_input("Strip Width B (ft)", 0.1, 500.0, 30.0, 0.5)
+        st.caption("Calculated separately with the WALLPRES strip-load approach: x2 = x1 + B.")
 
     st.subheader("📊 Display Options")
     n_points = st.slider("Pressure Diagram Points", 50, 500, 151)
@@ -328,7 +339,13 @@ def vertical_stresses_between_depths(z_top, z_bot):
     return total_increment, u_increment, effective_increment
 
 
-def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None):
+def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.0):
+    """Returns surcharge-only lateral wall pressure in psf.
+
+    Uniform surcharge uses Δp = Kq. Line, point, and strip load use the rigid-wall
+    NAVFAC/Boussinesq-style equations, so they are kept separate from earth pressure.
+    For strip load: x1 = distance to near edge, x2 = x1 + width.
+    """
     p = np.zeros_like(z_arr, dtype=float)
     if K_arr is None:
         K_arr = np.ones_like(z_arr, dtype=float)
@@ -354,7 +371,17 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None):
                 p[i] = (3 * Q / (2 * np.pi * H ** 2)) * (m ** 2 * n ** 3 / (m ** 2 + n ** 2) ** 2.5)
             else:
                 p[i] = (0.28 * Q / H ** 2) * (n ** 3 / (0.16 + n ** 2) ** 3)
-    return p
+    elif stype == "Strip Load":
+        x2 = x1 + width
+        for i, z in enumerate(z_arr):
+            if z <= 0 or q <= 0 or width <= 0:
+                continue
+            # WALLPRES / Bowles / USS Steel strip surcharge equation for a rigid wall.
+            # Angles are in radians here. The uploaded spreadsheet uses degrees and then converts back.
+            beta_strip = np.arctan2(x2, z) - np.arctan2(x1, z)
+            alpha_strip = np.arctan2(x1, z) + beta_strip / 2.0
+            p[i] = (2.0 * q / np.pi) * (beta_strip - np.sin(beta_strip) * np.cos(2.0 * alpha_strip))
+    return np.clip(p, 0.0, None)
 
 sigma_v_total = np.zeros_like(depths)
 u_water = np.zeros_like(depths)
@@ -386,36 +413,40 @@ for i, z in enumerate(depths):
 Ka_c = np.where(np.isfinite(Ka_c), Ka_c, Ka_r)
 Kp_c = np.where(np.isfinite(Kp_c), Kp_c, Kp_r)
 
-q_for_uniform = q_uniform if surcharge_type == "Uniform" else 0.0
-sur_r = surcharge_pressure(depths, surcharge_type, q=q_uniform, Q=Q_line if surcharge_type == "Line Load" else Q_point,
-                           x=x_line if surcharge_type == "Line Load" else x_point, K_arr=Ka_r)
-sur_c = surcharge_pressure(depths, surcharge_type, q=q_uniform, Q=Q_line if surcharge_type == "Line Load" else Q_point,
-                           x=x_line if surcharge_type == "Line Load" else x_point, K_arr=Ka_c)
-sur_0 = surcharge_pressure(depths, surcharge_type, q=q_uniform, Q=Q_line if surcharge_type == "Line Load" else Q_point,
-                           x=x_line if surcharge_type == "Line Load" else x_point, K_arr=K0_arr)
+# Surcharge is calculated separately from earth/water pressure.
+selected_Q = Q_line if surcharge_type == "Line Load" else Q_point
+selected_x = x_line if surcharge_type == "Line Load" else x_point
+sur_r = surcharge_pressure(depths, surcharge_type, q=q_uniform if surcharge_type == "Uniform" else q_strip,
+                           Q=selected_Q, x=selected_x, K_arr=Ka_r,
+                           x1=x_strip_near, width=strip_width)
+sur_c = surcharge_pressure(depths, surcharge_type, q=q_uniform if surcharge_type == "Uniform" else q_strip,
+                           Q=selected_Q, x=selected_x, K_arr=Ka_c,
+                           x1=x_strip_near, width=strip_width)
+sur_0 = surcharge_pressure(depths, surcharge_type, q=q_uniform if surcharge_type == "Uniform" else q_strip,
+                           Q=selected_Q, x=selected_x, K_arr=K0_arr,
+                           x1=x_strip_near, width=strip_width)
 
 cohesion_term_r = 2 * c_arr * safe_sqrt(Ka_r) if show_cohesion else 0.0
 cohesion_term_c = 2 * c_arr * safe_sqrt(Ka_c) if show_cohesion else 0.0
 
-pa_rankine_eff = Ka_r * sigma_v_eff - cohesion_term_r + sur_r
-pa_coulomb_eff = Ka_c * sigma_v_eff - cohesion_term_c + sur_c
-pa_atrest_eff = K0_arr * sigma_v_eff + sur_0
+pa_rankine_eff = Ka_r * sigma_v_eff - cohesion_term_r
+pa_coulomb_eff = Ka_c * sigma_v_eff - cohesion_term_c
+pa_atrest_eff = K0_arr * sigma_v_eff
 
 pa_rankine_eff_net = np.clip(pa_rankine_eff, 0, None)
 pa_coulomb_eff_net = np.clip(pa_coulomb_eff, 0, None)
 pa_atrest_eff_net = np.clip(pa_atrest_eff, 0, None)
 
 passive_mask = depths >= passive_start_depth
-passive_surcharge_r = np.where(passive_mask, (Kp_r * q_uniform if surcharge_type == "Uniform" else 0), 0.0)
-passive_surcharge_c = np.where(passive_mask, (Kp_c * q_uniform if surcharge_type == "Uniform" else 0), 0.0)
+# Passive resistance is also kept as soil/water pressure only. Surcharge is reported separately.
 pp_rankine_eff = np.where(
     passive_mask,
-    Kp_r * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_r) + passive_surcharge_r,
+    Kp_r * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_r),
     0.0
 )
 pp_coulomb_eff = np.where(
     passive_mask,
-    Kp_c * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_c) + passive_surcharge_c,
+    Kp_c * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_c),
     0.0
 )
 
@@ -426,6 +457,11 @@ pa_coulomb = pa_coulomb_eff_net + water_component
 pa_atrest = pa_atrest_eff_net + water_component
 pp_rankine = pp_rankine_eff + passive_water_component
 pp_coulomb = pp_coulomb_eff + passive_water_component
+
+# Optional combined diagrams/results for checking total demand.
+pa_rankine_plus_surcharge = pa_rankine + sur_r
+pa_coulomb_plus_surcharge = pa_coulomb + sur_c
+pa_atrest_plus_surcharge = pa_atrest + sur_0
 
 
 def resultant(p, z):
@@ -439,6 +475,12 @@ def resultant(p, z):
 Fa_r, ha_r = resultant(pa_rankine, depths)
 Fa_c, ha_c = resultant(pa_coulomb, depths)
 Fa_0, ha_0 = resultant(pa_atrest, depths)
+Fs_r, hs_r = resultant(sur_r, depths)
+Fs_c, hs_c = resultant(sur_c, depths)
+Fs_0, hs_0 = resultant(sur_0, depths)
+Ft_r, ht_r = resultant(pa_rankine_plus_surcharge, depths)
+Ft_c, ht_c = resultant(pa_coulomb_plus_surcharge, depths)
+Ft_0, ht_0 = resultant(pa_atrest_plus_surcharge, depths)
 Fp_r, hp_r = resultant(pp_rankine, depths)
 Fp_c, hp_c = resultant(pp_coulomb, depths)
 
@@ -467,6 +509,18 @@ with tab1:
         result_card("Rankine", "rankine", Fa_r, ha_r)
         result_card("Coulomb", "coulomb", Fa_c, ha_c)
         result_card("At-Rest", "atrest", Fa_0, ha_0)
+
+        st.subheader("Surcharge Resultants - Separate")
+        if surcharge_type == "None":
+            st.info("No surcharge selected.")
+        else:
+            if surcharge_type == "Uniform":
+                result_card("Uniform surcharge - Rankine K", "rankine", Fs_r, hs_r)
+                result_card("Uniform surcharge - Coulomb K", "coulomb", Fs_c, hs_c)
+                result_card("Uniform surcharge - At-Rest K", "atrest", Fs_0, hs_0)
+            else:
+                result_card(f"{surcharge_type} surcharge", "rankine", Fs_r, hs_r)
+            st.caption("Combined active + surcharge totals are shown in the Detailed Tables tab.")
 
         st.subheader("Passive Pressure Resultants")
         st.markdown(f"""
@@ -531,6 +585,19 @@ with tab2:
         ax4.legend(); ax4.grid(True, alpha=0.3); ax4.set_title("Passive Pressure Comparison")
         fig4.tight_layout(); st.pyplot(fig4); plt.close(fig4)
 
+    if surcharge_type != "None":
+        st.subheader("Surcharge Pressure - Separate")
+        fig5, ax5 = plt.subplots(figsize=(6, 6))
+        if surcharge_type == "Uniform":
+            ax5.plot(sur_r, depths, lw=2.2, label="Rankine K × q")
+            ax5.plot(sur_c, depths, lw=2.2, ls="--", label="Coulomb K × q")
+            ax5.plot(sur_0, depths, lw=2.2, ls=":", label="At-Rest K × q")
+        else:
+            ax5.plot(sur_r, depths, lw=2.2, label=surcharge_type)
+        ax5.invert_yaxis(); ax5.set_xlabel("Surcharge Pressure (psf)"); ax5.set_ylabel("Depth (ft)")
+        ax5.legend(); ax5.grid(True, alpha=0.3); ax5.set_title("Surcharge Pressure on Wall")
+        fig5.tight_layout(); st.pyplot(fig5); plt.close(fig5)
+
     st.subheader("Resultant Force Comparison")
     fig6, axes6 = plt.subplots(1, 2, figsize=(10, 4))
     methods = ["Rankine", "Coulomb", "At-Rest"]
@@ -551,6 +618,8 @@ with tab3:
 - Below the water table it uses saturated unit weight, γsat, computes pore pressure, then uses effective vertical stress for soil pressure.
 - Total lateral pressure = effective lateral soil pressure + water pressure.
 - Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
+- Surcharge pressure is calculated separately and is not mixed into the basic earth-pressure resultants.
+- For strip surcharge, the app follows the uploaded WALLPRES/Bowles-style rigid wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
 
 ### English-unit conventions
@@ -562,6 +631,7 @@ with tab3:
 | Cohesion | psf |
 | Pressure | psf |
 | Uniform surcharge | psf |
+| Strip surcharge | psf over a strip width in ft |
 | Line load | lb/ft |
 | Point load | lb |
 | Resultant force | kips/ft |
@@ -598,6 +668,11 @@ with tab4:
         "Rankine active total (psf)": np.round(pa_rankine[idx], 1),
         "Coulomb active total (psf)": np.round(pa_coulomb[idx], 1),
         "At-rest total (psf)": np.round(pa_atrest[idx], 1),
+        "Surcharge Rankine/rigid (psf)": np.round(sur_r[idx], 1),
+        "Surcharge Coulomb (psf)": np.round(sur_c[idx], 1),
+        "Rankine active + surcharge (psf)": np.round(pa_rankine_plus_surcharge[idx], 1),
+        "Coulomb active + surcharge (psf)": np.round(pa_coulomb_plus_surcharge[idx], 1),
+        "At-rest + surcharge (psf)": np.round(pa_atrest_plus_surcharge[idx], 1),
         "Rankine passive total (psf)": np.round(pp_rankine[idx], 1),
         "Coulomb passive total (psf)": np.round(pp_coulomb[idx], 1),
     })
@@ -606,8 +681,12 @@ with tab4:
     st.subheader("Summary of Results")
     summary = pd.DataFrame({
         "Method": ["Rankine", "Coulomb", "At-Rest"],
-        "Fa / F0 (kips/ft)": [f"{Fa_r:.2f}", f"{Fa_c:.2f}", f"{Fa_0:.2f}"],
-        "Height above base (ft)": [f"{ha_r:.2f}", f"{ha_c:.2f}", f"{ha_0:.2f}"],
+        "Earth/Water Fa or F0 (kips/ft)": [f"{Fa_r:.2f}", f"{Fa_c:.2f}", f"{Fa_0:.2f}"],
+        "Earth/Water height above base (ft)": [f"{ha_r:.2f}", f"{ha_c:.2f}", f"{ha_0:.2f}"],
+        "Separate surcharge F (kips/ft)": [f"{Fs_r:.2f}", f"{Fs_c:.2f}", f"{Fs_0:.2f}"],
+        "Surcharge height above base (ft)": [f"{hs_r:.2f}", f"{hs_c:.2f}", f"{hs_0:.2f}"],
+        "Combined active + surcharge F (kips/ft)": [f"{Ft_r:.2f}", f"{Ft_c:.2f}", f"{Ft_0:.2f}"],
+        "Combined height above base (ft)": [f"{ht_r:.2f}", f"{ht_c:.2f}", f"{ht_0:.2f}"],
         "Fp (kips/ft)": [f"{Fp_r:.2f}", f"{Fp_c:.2f}", "—"],
         "Passive height above base (ft)": [f"{hp_r:.2f}", f"{hp_c:.2f}", "—"],
     })
@@ -622,6 +701,6 @@ with tab4:
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#64748b;font-size:0.85rem;padding:10px'>
-  🏗️ Lateral Earth Pressure Calculator | English Units | Multi-Layer Soil | Groundwater | Rankine · Coulomb · At-Rest
+  🏗️ Lateral Earth Pressure Calculator | English Units | Multi-Layer Soil | Groundwater | Rankine · Coulomb · At-Rest · Separate Surcharge
 </div>
 """, unsafe_allow_html=True)
