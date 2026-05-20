@@ -55,7 +55,7 @@ with st.sidebar:
     gamma_w = st.number_input("Unit Weight of Water γw (pcf)", 60.0, 64.0, 62.4, 0.1)
 
     st.subheader("🪨 Soil Properties / Layers")
-    st.caption("Use the Add Layer button to create more layers. Depths are measured downward from the retained ground surface.")
+    st.caption("Use Add Layer to create more layers. Enter each layer bottom depth from the top; each layer thickness can be any value greater than 0 ft.")
 
     if "soil_layers" not in st.session_state:
         st.session_state.soil_layers = default_layers(1, float(H)).to_dict("records")
@@ -66,7 +66,7 @@ with st.sidebar:
             if layers:
                 previous_top = 0.0 if len(layers) == 1 else float(layers[-2]["Bottom Depth (ft)"])
                 split_depth = round((previous_top + float(H)) / 2.0, 2)
-                layers[-1]["Bottom Depth (ft)"] = max(previous_top + 0.5, min(split_depth, float(H) - 0.5))
+                layers[-1]["Bottom Depth (ft)"] = max(previous_top + 0.1, min(split_depth, float(H) - 0.1))
                 template = layers[-1].copy()
                 template["Bottom Depth (ft)"] = float(H)
             else:
@@ -86,28 +86,26 @@ with st.sidebar:
     for i, layer in enumerate(st.session_state.soil_layers):
         with st.container(border=True):
             st.markdown(f"**Layer {i + 1}**")
-            bottom_default = min(float(layer.get("Bottom Depth (ft)", H)), float(H))
-            if i == len(st.session_state.soil_layers) - 1:
-                bottom_min = min(float(H), previous_bottom + 0.1)
-                bottom_value = st.number_input(
-                    "Bottom Depth from Top (ft)",
-                    min_value=bottom_min,
-                    max_value=float(H),
-                    value=float(H),
-                    step=0.5,
-                    key=f"layer_{i}_bottom",
-                    help="Last layer bottom is set to the wall height."
-                )
-            else:
-                bottom_min = min(float(H), previous_bottom + 0.1)
-                bottom_value = st.number_input(
-                    "Bottom Depth from Top (ft)",
-                    min_value=bottom_min,
-                    max_value=float(H),
-                    value=max(bottom_min, bottom_default),
-                    step=0.5,
-                    key=f"layer_{i}_bottom",
-                )
+            # Bottom depth is an editable layer boundary.
+            # Each layer only needs a thickness greater than zero; the last
+            # layer is no longer locked to the wall height. If the final
+            # boundary is above the wall base, the calculation extends the
+            # last entered layer properties down to H.
+            bottom_min = min(float(H), previous_bottom + 0.01)
+            bottom_max = float(H)
+            bottom_default = float(layer.get("Bottom Depth (ft)", bottom_max))
+            bottom_default = min(max(bottom_default, bottom_min), bottom_max)
+
+            bottom_value = st.number_input(
+                "Bottom Depth from Top (ft)",
+                min_value=bottom_min,
+                max_value=bottom_max,
+                value=bottom_default,
+                step=0.1,
+                format="%.2f",
+                key=f"layer_{i}_bottom",
+                help="Enter the bottom depth of this layer. Layer thickness must be greater than 0 ft."
+            )
 
             gamma_m_value = st.number_input(
                 "Moist Unit Weight γm (pcf)",
