@@ -608,8 +608,7 @@ def create_geometry_figure():
     soil_poly_y = [0.0, y_surface_right, h, h]
     ax.fill(soil_poly_x, soil_poly_y, color="#d97706", alpha=0.12, label="Backfill soil")
 
-    # Excavation/front side of wall.
-    ax.fill_betweenx([0, h], -0.8 * h, wall_x, color="#e2e8f0", alpha=0.55, label="Wall front side")
+    # Front side of wall intentionally left blank.
 
     # Wall line and thickness.
     ax.plot(wall_x, wall_y, color="#334155", lw=5, solid_capstyle="round", label="Wall")
@@ -648,14 +647,6 @@ def create_geometry_figure():
                 f"WT {water_table:.2f} ft", color="#0284c7", fontsize=9, fontweight="bold")
         ax.fill_between([float(water_table) * tan_alpha, x_right], float(water_table), h,
                         color="#38bdf8", alpha=0.10)
-
-    # Passive start depth.
-    if passive_start_depth > 0:
-        ax.hlines(float(passive_start_depth), xmin=-0.35 * h, xmax=x_right * 0.18,
-                  colors="#92400e", linestyles="-.", lw=2.0, label=f"Passive starts = {passive_start_depth:.2f} ft")
-        ax.text(-0.35 * h, float(passive_start_depth) - 0.3,
-                f"Passive starts\n{passive_start_depth:.2f} ft", color="#92400e", fontsize=8,
-                ha="left", va="bottom", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#f59e0b", alpha=0.85))
 
     # Surcharge geometry.
     if surcharge_type == "Uniform":
@@ -711,10 +702,10 @@ def create_geometry_figure():
                 arrowprops=dict(arrowstyle="<->", color="#0f172a", lw=1.2))
     ax.text(-1.6, h / 2.0, f"H = {h:.2f} ft", rotation=90, ha="center", va="center", fontsize=9, color="#0f172a")
 
-    ax.set_title("Input Geometry Schematic", fontsize=13, fontweight="bold", color="#1a3a5c")
+    # No title inside the figure; the app/report section heading provides context.
     ax.set_xlabel("Horizontal distance from wall top (ft)")
     ax.set_ylabel("Depth from top (ft)")
-    ax.set_xlim(-0.45 * h, x_right)
+    ax.set_xlim(-0.12 * h, x_right)
     ax.set_ylim(y_bottom, y_top)
     ax.grid(True, alpha=0.25, linestyle="--")
     ax.legend(loc="lower right", fontsize=8)
