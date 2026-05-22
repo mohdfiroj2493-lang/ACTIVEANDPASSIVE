@@ -569,6 +569,33 @@ Ft_0, ht_0 = resultant(pa_atrest_plus_surcharge, depths)
 Fp_r, hp_r = resultant(pp_rankine, depths)
 Fp_c, hp_c = resultant(pp_coulomb, depths)
 
+# Net pressure for wall structural diagrams. Positive = active/surcharge side load;
+# negative = passive resistance exceeds active + surcharge at that depth.
+net_pressure_rankine = pa_rankine_plus_surcharge - pp_rankine
+net_pressure_coulomb = pa_coulomb_plus_surcharge - pp_coulomb
+
+def cumulative_trapezoid_np(y, x):
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+    out = np.zeros_like(y, dtype=float)
+    if len(y) > 1:
+        dx = np.diff(x)
+        area = 0.5 * (y[1:] + y[:-1]) * dx
+        out[1:] = np.cumsum(area)
+    return out
+
+# Shear and moment are calculated along the pile/wall length from the top downward.
+# Pressure is psf = lb/ft of wall height per ft wall width.
+# Shear output: kips/ft wall width. Moment output: kip-ft/ft wall width.
+shear_rankine = cumulative_trapezoid_np(net_pressure_rankine, depths) / 1000.0
+shear_coulomb = cumulative_trapezoid_np(net_pressure_coulomb, depths) / 1000.0
+moment_rankine = cumulative_trapezoid_np(shear_rankine, depths)
+moment_coulomb = cumulative_trapezoid_np(shear_coulomb, depths)
+
+max_abs_shear_rankine = float(np.max(np.abs(shear_rankine))) if len(shear_rankine) else 0.0
+max_abs_shear_coulomb = float(np.max(np.abs(shear_coulomb))) if len(shear_coulomb) else 0.0
+max_abs_moment_rankine = float(np.max(np.abs(moment_rankine))) if len(moment_rankine) else 0.0
+max_abs_moment_coulomb = float(np.max(np.abs(moment_coulomb))) if len(moment_coulomb) else 0.0
 
 
 # -----------------------------
@@ -856,6 +883,36 @@ def create_surcharge_figure():
     return fig
 
 
+def create_net_shear_moment_figure():
+    fig, axes = plt.subplots(1, 3, figsize=(15, 6), sharey=True)
+
+    axes[0].plot(net_pressure_rankine, depths, lw=2.2, label="Rankine net")
+    axes[0].plot(net_pressure_coulomb, depths, lw=2.2, ls="--", label="Coulomb net")
+    axes[0].axvline(0, color="#334155", lw=0.8)
+    axes[0].set_xlabel("Net pressure (psf)")
+    axes[0].set_ylabel("Depth from top (ft)")
+    axes[0].set_title("Net Wall Pressure")
+
+    axes[1].plot(shear_rankine, depths, lw=2.2, label="Rankine")
+    axes[1].plot(shear_coulomb, depths, lw=2.2, ls="--", label="Coulomb")
+    axes[1].axvline(0, color="#334155", lw=0.8)
+    axes[1].set_xlabel("Shear V (kips/ft)")
+    axes[1].set_title("Shear Diagram")
+
+    axes[2].plot(moment_rankine, depths, lw=2.2, label="Rankine")
+    axes[2].plot(moment_coulomb, depths, lw=2.2, ls="--", label="Coulomb")
+    axes[2].axvline(0, color="#334155", lw=0.8)
+    axes[2].set_xlabel("Moment M (kip-ft/ft)")
+    axes[2].set_title("Moment Diagram")
+
+    for ax in axes:
+        ax.invert_yaxis()
+        ax.grid(True, alpha=0.3, linestyle="--")
+        ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
 def report_table_df():
     idx = np.linspace(0, len(depths) - 1, min(30, len(depths)), dtype=int)
     return pd.DataFrame({
@@ -871,6 +928,12 @@ def report_table_df():
         "Surcharge R (psf)": np.round(sur_r[idx], 1),
         "Rankine passive (psf)": np.round(pp_rankine[idx], 1),
         "Coulomb passive (psf)": np.round(pp_coulomb[idx], 1),
+        "Rankine net pressure (psf)": np.round(net_pressure_rankine[idx], 1),
+        "Coulomb net pressure (psf)": np.round(net_pressure_coulomb[idx], 1),
+        "Rankine shear (kips/ft)": np.round(shear_rankine[idx], 3),
+        "Coulomb shear (kips/ft)": np.round(shear_coulomb[idx], 3),
+        "Rankine moment (kip-ft/ft)": np.round(moment_rankine[idx], 3),
+        "Coulomb moment (kip-ft/ft)": np.round(moment_coulomb[idx], 3),
     })
 
 
@@ -882,6 +945,8 @@ def summary_table_df():
         "Surcharge resultant (kips/ft)": [f"{Fs_r:.2f}", f"{Fs_c:.2f}", f"{Fs_0:.2f}"],
         "Combined resultant (kips/ft)": [f"{Ft_r:.2f}", f"{Ft_c:.2f}", f"{Ft_0:.2f}"],
         "Passive resultant (kips/ft)": [f"{Fp_r:.2f}", f"{Fp_c:.2f}", "--"],
+        "Max abs shear (kips/ft)": [f"{max_abs_shear_rankine:.2f}", f"{max_abs_shear_coulomb:.2f}", "--"],
+        "Max abs moment (kip-ft/ft)": [f"{max_abs_moment_rankine:.2f}", f"{max_abs_moment_coulomb:.2f}", "--"],
     })
 
 
@@ -1109,6 +1174,20 @@ with tab2:
         ax4.legend(); ax4.grid(True, alpha=0.3); ax4.set_title("Passive Pressure Comparison")
         fig4.tight_layout(); st.pyplot(fig4); plt.close(fig4)
 
+    st.subheader("Net Pressure, Shear, and Moment Along Pile/Wall")
+    fig_sm = create_net_shear_moment_figure()
+    st.pyplot(fig_sm)
+    plt.close(fig_sm)
+    st.caption("Net pressure = active pressure + surcharge pressure - passive pressure. Shear is integrated from the wall top downward; moment is the integral of shear. Units are per foot of wall width.")
+
+    csm1, csm2 = st.columns(2)
+    with csm1:
+        st.metric("Max |V| - Rankine", f"{max_abs_shear_rankine:.2f} kips/ft")
+        st.metric("Max |M| - Rankine", f"{max_abs_moment_rankine:.2f} kip-ft/ft")
+    with csm2:
+        st.metric("Max |V| - Coulomb", f"{max_abs_shear_coulomb:.2f} kips/ft")
+        st.metric("Max |M| - Coulomb", f"{max_abs_moment_coulomb:.2f} kip-ft/ft")
+
     if surcharge_type != "None":
         st.subheader("Surcharge Pressure - Separate")
         fig5, ax5 = plt.subplots(figsize=(6, 6))
@@ -1206,6 +1285,12 @@ with tab4:
         "At-rest + surcharge (psf)": np.round(pa_atrest_plus_surcharge[idx], 1),
         "Rankine passive total (psf)": np.round(pp_rankine[idx], 1),
         "Coulomb passive total (psf)": np.round(pp_coulomb[idx], 1),
+        "Rankine net pressure (psf)": np.round(net_pressure_rankine[idx], 1),
+        "Coulomb net pressure (psf)": np.round(net_pressure_coulomb[idx], 1),
+        "Rankine shear (kips/ft)": np.round(shear_rankine[idx], 3),
+        "Coulomb shear (kips/ft)": np.round(shear_coulomb[idx], 3),
+        "Rankine moment (kip-ft/ft)": np.round(moment_rankine[idx], 3),
+        "Coulomb moment (kip-ft/ft)": np.round(moment_coulomb[idx], 3),
     })
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -1220,6 +1305,8 @@ with tab4:
         "Combined height above base (ft)": [f"{ht_r:.2f}", f"{ht_c:.2f}", f"{ht_0:.2f}"],
         "Fp (kips/ft)": [f"{Fp_r:.2f}", f"{Fp_c:.2f}", "—"],
         "Passive height above base (ft)": [f"{hp_r:.2f}", f"{hp_c:.2f}", "—"],
+        "Max |V| (kips/ft)": [f"{max_abs_shear_rankine:.2f}", f"{max_abs_shear_coulomb:.2f}", "—"],
+        "Max |M| (kip-ft/ft)": [f"{max_abs_moment_rankine:.2f}", f"{max_abs_moment_coulomb:.2f}", "—"],
     })
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
