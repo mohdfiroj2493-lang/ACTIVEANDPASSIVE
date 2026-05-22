@@ -229,7 +229,7 @@ with st.sidebar:
             aashto_bf = 0.0
             aashto_L = 0.0
             st.caption("AASHTO 2:1 distribution for point load: bf = 0, Δσv = P'v / D1², then lateral surcharge Δp = K × Δσv.")
-        st.caption("D1 is computed from the AASHTO sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z2)/2 + d.")
+        st.caption("D1 is computed from the AASHTO sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d.")
 
     st.subheader("📊 Display Options")
     n_points = st.slider("Pressure Diagram Points", 50, 500, 151)
@@ -390,7 +390,7 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
 
     AASHTO option uses the 2:1 effective-width method from the user-provided
     sketch: z2 = 2d - bf; for z <= z2, D1 = bf + z; for z > z2,
-    D1 = (bf + z2)/2 + d. Vertical stress is converted to lateral surcharge
+    D1 = (bf + z)/2 + d. Vertical stress is converted to lateral surcharge
     as Δp = K × Δσv.
     """
     p = np.zeros_like(z_arr, dtype=float)
@@ -410,7 +410,7 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
             if z <= z2:
                 D1 = bf + z
             else:
-                D1 = (bf + z2) / 2.0 + d
+                D1 = (bf + z) / 2.0 + d
             D1 = max(D1, 1e-6)
             if aashto_load_type == "Strip footing":
                 delta_sigma_v = Pv / D1
@@ -859,7 +859,7 @@ with tab3:
 - Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
 - Surcharge pressure is calculated separately and is not mixed into the basic earth-pressure resultants.
 - For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
-- For AASHTO surcharge, the app follows the 2:1 effective-width method shown in your sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z2)/2 + d. It calculates Δσv separately and then applies Δp = K × Δσv.
+- For AASHTO surcharge, the app follows the 2:1 effective-width method shown in your sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d. It calculates Δσv separately and then applies Δp = K × Δσv.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
 
 ### English-unit conventions
