@@ -1043,8 +1043,11 @@ def generate_word_report(template_bytes=None, meta=None):
         ("Figure 3: Active and at-rest pressure comparison.", create_active_comparison_figure()),
         ("Figure 4: Passive pressure comparison.", create_passive_comparison_figure()),
     ]
+    next_fig_num = 5
     if surcharge_type != "None":
-        figures.append(("Figure 5: Separate surcharge pressure diagram.", create_surcharge_figure()))
+        figures.append((f"Figure {next_fig_num}: Separate surcharge pressure diagram.", create_surcharge_figure()))
+        next_fig_num += 1
+    figures.append((f"Figure {next_fig_num}: Net pressure, shear, and moment diagrams along the pile/wall.", create_net_shear_moment_figure()))
     for caption, fig in figures:
         doc.add_paragraph(caption)
         buf = fig_to_png_bytes(fig)
