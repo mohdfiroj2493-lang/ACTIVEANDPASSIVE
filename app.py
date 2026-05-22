@@ -164,7 +164,17 @@ with st.sidebar:
     layer_df = pd.DataFrame(updated_layers)
 
     st.subheader("📦 Surcharge")
-    surcharge_type = st.selectbox("Surcharge Type", ["None", "Uniform", "Line Load", "Point Load", "Strip Load"])
+    surcharge_options = {
+        "None": "None",
+        "Uniform (Kq)": "Uniform",
+        "Line Load (NAVFAC/Boussinesq)": "Line Load",
+        "Point Load (NAVFAC/Boussinesq)": "Point Load",
+        "Strip Load (FHWA/WALLPRES)": "Strip Load",
+        "AASHTO Footing/Point Load (2:1 Distribution)": "AASHTO",
+    }
+    surcharge_label = st.selectbox("Surcharge Type", list(surcharge_options.keys()))
+    surcharge_type = surcharge_options[surcharge_label]
+
     q_uniform = 0.0
     Q_line = 0.0
     x_line = 5.0
@@ -173,6 +183,11 @@ with st.sidebar:
     q_strip = 0.0
     x_strip_near = 2.0
     strip_width = 10.0
+    aashto_load_type = "Strip footing"
+    aashto_Pv = 0.0
+    aashto_bf = 2.0
+    aashto_L = 10.0
+    aashto_d = 5.0
 
     if surcharge_type == "Uniform":
         q_uniform = st.number_input("Uniform Surcharge q (psf)", 0.0, 10000.0, 250.0, 25.0)
@@ -190,6 +205,31 @@ with st.sidebar:
         x_strip_near = st.number_input("Distance to Near Edge x1 (ft)", 0.0, 200.0, 2.0, 0.5)
         strip_width = st.number_input("Strip Width B (ft)", 0.1, 500.0, 30.0, 0.5)
         st.caption("Calculated separately with the WALLPRES strip-load approach: x2 = x1 + B.")
+    elif surcharge_type == "AASHTO":
+        aashto_load_type = st.selectbox(
+            "AASHTO Load Type",
+            ["Strip footing", "Isolated rectangular footing", "Point load"],
+        )
+        aashto_d = st.number_input(
+            "Distance d from wall back face to load centroid (ft)",
+            0.0, 500.0, 5.0, 0.5,
+        )
+        if aashto_load_type == "Strip footing":
+            aashto_Pv = st.number_input("Strip load Pv (lb/ft)", 0.0, 500000.0, 2000.0, 100.0)
+            aashto_bf = st.number_input("Loaded width bf (ft)", 0.0, 200.0, 4.0, 0.5)
+            aashto_L = 0.0
+            st.caption("AASHTO 2:1 distribution: Δσv = Pv / D1, then lateral surcharge Δp = K × Δσv.")
+        elif aashto_load_type == "Isolated rectangular footing":
+            aashto_Pv = st.number_input("Total vertical load P'v (lb)", 0.0, 5000000.0, 50000.0, 1000.0)
+            aashto_bf = st.number_input("Footing width bf (ft)", 0.0, 200.0, 4.0, 0.5)
+            aashto_L = st.number_input("Footing length L (ft)", 0.1, 500.0, 10.0, 0.5)
+            st.caption("AASHTO 2:1 distribution: Δσv = P'v / [D1(L+z)], then lateral surcharge Δp = K × Δσv.")
+        else:
+            aashto_Pv = st.number_input("Point load P'v (lb)", 0.0, 5000000.0, 50000.0, 1000.0)
+            aashto_bf = 0.0
+            aashto_L = 0.0
+            st.caption("AASHTO 2:1 distribution for point load: bf = 0, Δσv = P'v / D1², then lateral surcharge Δp = K × Δσv.")
+        st.caption("D1 is computed from the AASHTO sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z2)/2 + d.")
 
     st.subheader("📊 Display Options")
     n_points = st.slider("Pressure Diagram Points", 50, 500, 151)
@@ -339,18 +379,46 @@ def vertical_stresses_between_depths(z_top, z_bot):
     return total_increment, u_increment, effective_increment
 
 
-def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.0):
+def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.0,
+                       aashto_load_type="Strip footing", aashto_Pv=0.0, aashto_bf=0.0,
+                       aashto_L=0.0, aashto_d=0.0):
     """Returns surcharge-only lateral wall pressure in psf.
 
-    Uniform surcharge uses Δp = Kq. Line, point, and strip load use the rigid-wall
-    NAVFAC/Boussinesq-style equations, so they are kept separate from earth pressure.
-    For strip load: x1 = distance to near edge, x2 = x1 + width.
+    Uniform surcharge uses Δp = Kq. Line, point, and strip load use the
+    FHWA/WALLPRES-style equations and are kept separate from basic earth
+    pressure. For strip load: x1 = distance to near edge, x2 = x1 + width.
+
+    AASHTO option uses the 2:1 effective-width method from the user-provided
+    sketch: z2 = 2d - bf; for z <= z2, D1 = bf + z; for z > z2,
+    D1 = (bf + z2)/2 + d. Vertical stress is converted to lateral surcharge
+    as Δp = K × Δσv.
     """
     p = np.zeros_like(z_arr, dtype=float)
     if K_arr is None:
         K_arr = np.ones_like(z_arr, dtype=float)
     if stype == "Uniform":
         p = K_arr * q
+    elif stype == "AASHTO":
+        bf = max(float(aashto_bf), 0.0)
+        d = max(float(aashto_d), 0.0)
+        L = max(float(aashto_L), 0.0)
+        Pv = max(float(aashto_Pv), 0.0)
+        z2 = max(0.0, 2.0 * d - bf)
+        for i, z in enumerate(z_arr):
+            if z <= 0 or Pv <= 0:
+                continue
+            if z <= z2:
+                D1 = bf + z
+            else:
+                D1 = (bf + z2) / 2.0 + d
+            D1 = max(D1, 1e-6)
+            if aashto_load_type == "Strip footing":
+                delta_sigma_v = Pv / D1
+            elif aashto_load_type == "Isolated rectangular footing":
+                delta_sigma_v = Pv / (D1 * max(L + z, 1e-6))
+            else:
+                delta_sigma_v = Pv / (D1 ** 2)
+            p[i] = K_arr[i] * delta_sigma_v
     elif stype == "Line Load":
         for i, z in enumerate(z_arr):
             if z <= 0:
@@ -376,7 +444,7 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
         for i, z in enumerate(z_arr):
             if z <= 0 or q <= 0 or width <= 0:
                 continue
-            # WALLPRES / Bowles / USS Steel strip surcharge equation for a rigid wall.
+            # FHWA/WALLPRES strip surcharge equation for a rigid wall.
             # Angles are in radians here. The uploaded spreadsheet uses degrees and then converts back.
             beta_strip = np.arctan2(x2, z) - np.arctan2(x1, z)
             alpha_strip = np.arctan2(x1, z) + beta_strip / 2.0
@@ -421,13 +489,19 @@ selected_Q = Q_line if surcharge_type == "Line Load" else Q_point
 selected_x = x_line if surcharge_type == "Line Load" else x_point
 sur_r = surcharge_pressure(depths, surcharge_type, q=q_uniform if surcharge_type == "Uniform" else q_strip,
                            Q=selected_Q, x=selected_x, K_arr=Ka_r,
-                           x1=x_strip_near, width=strip_width)
+                           x1=x_strip_near, width=strip_width,
+                           aashto_load_type=aashto_load_type, aashto_Pv=aashto_Pv,
+                           aashto_bf=aashto_bf, aashto_L=aashto_L, aashto_d=aashto_d)
 sur_c = surcharge_pressure(depths, surcharge_type, q=q_uniform if surcharge_type == "Uniform" else q_strip,
                            Q=selected_Q, x=selected_x, K_arr=Ka_c,
-                           x1=x_strip_near, width=strip_width)
+                           x1=x_strip_near, width=strip_width,
+                           aashto_load_type=aashto_load_type, aashto_Pv=aashto_Pv,
+                           aashto_bf=aashto_bf, aashto_L=aashto_L, aashto_d=aashto_d)
 sur_0 = surcharge_pressure(depths, surcharge_type, q=q_uniform if surcharge_type == "Uniform" else q_strip,
                            Q=selected_Q, x=selected_x, K_arr=K0_arr,
-                           x1=x_strip_near, width=strip_width)
+                           x1=x_strip_near, width=strip_width,
+                           aashto_load_type=aashto_load_type, aashto_Pv=aashto_Pv,
+                           aashto_bf=aashto_bf, aashto_L=aashto_L, aashto_d=aashto_d)
 
 cohesion_term_r = 2 * c_arr * safe_sqrt(Ka_r) if show_cohesion else 0.0
 cohesion_term_c = 2 * c_arr * safe_sqrt(Ka_c) if show_cohesion else 0.0
@@ -511,6 +585,8 @@ def create_geometry_figure():
         max_surcharge_x = float(x_point)
     elif surcharge_type == "Strip Load":
         max_surcharge_x = float(x_strip_near) + float(strip_width)
+    elif surcharge_type == "AASHTO":
+        max_surcharge_x = float(aashto_d) + max(float(aashto_bf), 0.0) / 2.0
 
     x_right = max(h * 1.25, max_surcharge_x + h * 0.25, 20.0)
     y_surface_right = -x_right * tan_beta
@@ -610,6 +686,17 @@ def create_geometry_figure():
                 f"Strip load q={q_strip:.0f} psf\nx1={x1:.2f} ft, B={strip_width:.2f} ft",
                 color="#dc2626", fontsize=9, ha="center", va="top",
                 bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#fecaca", alpha=0.9))
+    elif surcharge_type == "AASHTO":
+        x = float(aashto_d)
+        y = -x * tan_beta
+        width_plot = max(float(aashto_bf), 0.5)
+        ax.plot([x - width_plot / 2.0, x + width_plot / 2.0], [y, y], color="#dc2626", lw=5, solid_capstyle="butt")
+        ax.annotate("", xy=(x, y + 0.1), xytext=(x, y - 2.6),
+                    arrowprops=dict(arrowstyle="-|>", color="#dc2626", lw=2.2))
+        ax.text(x, y - 2.9,
+                f"AASHTO {aashto_load_type}\nP={aashto_Pv:.0f} lb{'/ft' if aashto_load_type == 'Strip footing' else ''}\nd={aashto_d:.2f} ft, bf={aashto_bf:.2f} ft",
+                color="#dc2626", fontsize=9, ha="center", va="top",
+                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#fecaca", alpha=0.9))
 
     # Dimension arrows for wall height.
     ax.annotate("", xy=(-1.2, 0), xytext=(-1.2, h),
@@ -661,10 +748,11 @@ with tab1:
         if surcharge_type == "None":
             st.info("No surcharge selected.")
         else:
-            if surcharge_type == "Uniform":
-                result_card("Uniform surcharge - Rankine K", "rankine", Fs_r, hs_r)
-                result_card("Uniform surcharge - Coulomb K", "coulomb", Fs_c, hs_c)
-                result_card("Uniform surcharge - At-Rest K", "atrest", Fs_0, hs_0)
+            if surcharge_type in ["Uniform", "AASHTO"]:
+                card_prefix = "Uniform surcharge" if surcharge_type == "Uniform" else "AASHTO live-load surcharge"
+                result_card(f"{card_prefix} - Rankine K", "rankine", Fs_r, hs_r)
+                result_card(f"{card_prefix} - Coulomb K", "coulomb", Fs_c, hs_c)
+                result_card(f"{card_prefix} - At-Rest K", "atrest", Fs_0, hs_0)
             else:
                 result_card(f"{surcharge_type} surcharge", "rankine", Fs_r, hs_r)
             st.caption("Combined active + surcharge totals are shown in the Detailed Tables tab.")
@@ -739,6 +827,10 @@ with tab2:
             ax5.plot(sur_r, depths, lw=2.2, label="Rankine K × q")
             ax5.plot(sur_c, depths, lw=2.2, ls="--", label="Coulomb K × q")
             ax5.plot(sur_0, depths, lw=2.2, ls=":", label="At-Rest K × q")
+        elif surcharge_type == "AASHTO":
+            ax5.plot(sur_r, depths, lw=2.2, label="Rankine K × γs × heq")
+            ax5.plot(sur_c, depths, lw=2.2, ls="--", label="Coulomb K × γs × heq")
+            ax5.plot(sur_0, depths, lw=2.2, ls=":", label="At-Rest K × γs × heq")
         else:
             ax5.plot(sur_r, depths, lw=2.2, label=surcharge_type)
         ax5.invert_yaxis(); ax5.set_xlabel("Surcharge Pressure (psf)"); ax5.set_ylabel("Depth (ft)")
@@ -766,7 +858,8 @@ with tab3:
 - Total lateral pressure = effective lateral soil pressure + water pressure.
 - Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
 - Surcharge pressure is calculated separately and is not mixed into the basic earth-pressure resultants.
-- For strip surcharge, the app follows the uploaded WALLPRES/Bowles-style rigid wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
+- For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
+- For AASHTO surcharge, the app follows the 2:1 effective-width method shown in your sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z2)/2 + d. It calculates Δσv separately and then applies Δp = K × Δσv.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
 
 ### English-unit conventions
@@ -781,6 +874,8 @@ with tab3:
 | Strip surcharge | psf over a strip width in ft |
 | Line load | lb/ft |
 | Point load | lb |
+| AASHTO strip load Pv | lb/ft |
+| AASHTO isolated/point load P'v | lb |
 | Resultant force | kips/ft |
 
 ### Key formulas
