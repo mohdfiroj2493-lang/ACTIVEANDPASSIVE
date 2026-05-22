@@ -608,7 +608,21 @@ def create_geometry_figure():
     soil_poly_y = [0.0, y_surface_right, h, h]
     ax.fill(soil_poly_x, soil_poly_y, color="#d97706", alpha=0.12, label="Backfill soil")
 
-    # Front side of wall intentionally left blank.
+    # Front side excavation / passive side.
+    # The ground in front of the wall is shown only below the passive/excavation start depth.
+    # Above this elevation the front side is left blank to represent the excavation cut.
+    x_left = -0.12 * h
+    exc_depth = max(0.0, min(float(passive_start_depth), h))
+    if exc_depth < h:
+        ax.fill(
+            [x_left, exc_depth * tan_alpha, wall_x_bottom, x_left],
+            [exc_depth, exc_depth, h, h],
+            color="#e5e7eb",
+            alpha=0.45,
+            ec="none",
+            label="Excavation / passive side",
+        )
+        ax.plot([x_left, exc_depth * tan_alpha], [exc_depth, exc_depth], color="#111827", lw=2.4)
 
     # Wall line and thickness.
     ax.plot(wall_x, wall_y, color="#334155", lw=5, solid_capstyle="round", label="Wall")
@@ -623,6 +637,20 @@ def create_geometry_figure():
         "#fef3c7", "#dbeafe", "#dcfce7", "#fee2e2",
         "#ede9fe", "#ffedd5", "#cffafe", "#fce7f3"
     ]
+
+    def draw_front_excavation_layer(i, y1, y2):
+        """Show passive-side soil below the excavation/passive start depth."""
+        y1 = max(y1, exc_depth)
+        y2 = min(y2, h)
+        if y2 <= y1:
+            return
+        ax.fill(
+            [x_left, y1 * tan_alpha, y2 * tan_alpha, x_left],
+            [y1, y1, y2, y2],
+            color=layer_colors[i % len(layer_colors)],
+            alpha=0.30,
+            ec="none",
+        )
 
     def draw_soil_layer(i, row, y1, y2, extended=False):
         """Draw one layer interval and label its soil parameters."""
@@ -664,6 +692,7 @@ def create_geometry_figure():
         if bottom_depth <= top_depth:
             continue
         draw_soil_layer(i, row, top_depth, bottom_depth)
+        draw_front_excavation_layer(i, top_depth, bottom_depth)
         top_depth = bottom_depth
         last_row = row
         last_i = i
@@ -672,6 +701,7 @@ def create_geometry_figure():
     # the final layer's properties are extended to the base for calculation.
     if top_depth < h and last_row is not None:
         draw_soil_layer(last_i, last_row, top_depth, h, extended=True)
+        draw_front_excavation_layer(last_i, top_depth, h)
 
     # Water table.
     if include_water:
