@@ -390,8 +390,9 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
 
     AASHTO option uses the 2:1 effective-width method from the user-provided
     sketch: z2 = 2d - bf; for z <= z2, D1 = bf + z; for z > z2,
-    D1 = (bf + z)/2 + d. Vertical stress is converted to lateral surcharge
-    as Δp = K × Δσv.
+    D1 = (bf + z)/2 + d. At z = 0, the pressure is not forced to zero;
+    D1 = bf, so a footing surcharge can produce a nonzero wall pressure at
+    the top. Vertical stress is converted to lateral surcharge as Δp = K × Δσv.
     """
     p = np.zeros_like(z_arr, dtype=float)
     if K_arr is None:
@@ -405,7 +406,9 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
         Pv = max(float(aashto_Pv), 0.0)
         z2 = max(0.0, 2.0 * d - bf)
         for i, z in enumerate(z_arr):
-            if z <= 0 or Pv <= 0:
+            # Do not skip z = 0. For the AASHTO 2:1 method, the surcharge
+            # pressure at the ground surface can be nonzero because D1 = bf at z = 0.
+            if Pv <= 0:
                 continue
             if z <= z2:
                 D1 = bf + z
@@ -417,6 +420,8 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
             elif aashto_load_type == "Isolated rectangular footing":
                 delta_sigma_v = Pv / (D1 * max(L + z, 1e-6))
             else:
+                # For a theoretical point load with bf = 0 at z = 0, the equation is singular.
+                # The small lower bound prevents a crash while preserving the near-surface peak.
                 delta_sigma_v = Pv / (D1 ** 2)
             p[i] = K_arr[i] * delta_sigma_v
     elif stype == "Line Load":
@@ -859,7 +864,7 @@ with tab3:
 - Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
 - Surcharge pressure is calculated separately and is not mixed into the basic earth-pressure resultants.
 - For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
-- For AASHTO surcharge, the app follows the 2:1 effective-width method shown in your sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d. It calculates Δσv separately and then applies Δp = K × Δσv.
+- For AASHTO surcharge, the app follows the 2:1 effective-width method shown in your sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d. The calculation does not force surcharge pressure to zero at z = 0; when bf > 0, D1 = bf at the ground surface. It calculates Δσv separately and then applies Δp = K × Δσv.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
 
 ### English-unit conventions
