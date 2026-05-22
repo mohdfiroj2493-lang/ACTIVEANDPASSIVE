@@ -905,8 +905,16 @@ def generate_word_report(template_bytes=None, meta=None):
         "Water pressure is added separately when total pressure is selected.",
         "Surcharge pressure is calculated separately from earth pressure. FHWA/WALLPRES strip loading and AASHTO 2:1 footing/point-load distribution are included as separate surcharge methods when selected.",
     ]
+    def add_safe_bullet(document, text):
+        # Some company templates do not include Word's built-in "List Bullet" style.
+        # Use it when available; otherwise write a normal paragraph with a bullet character.
+        try:
+            document.add_paragraph(text, style="List Bullet")
+        except KeyError:
+            document.add_paragraph(f"• {text}")
+
     for item in theory_items:
-        doc.add_paragraph(item, style="List Bullet")
+        add_safe_bullet(doc, item)
 
     doc.add_heading("Figures", level=2)
     figures = [
