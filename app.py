@@ -2,6 +2,9 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from io import BytesIO
+from datetime import date
+import os
 
 st.set_page_config(
     page_title="Lateral Earth Pressure Calculator - English Units",
@@ -718,10 +721,228 @@ def create_geometry_figure():
     fig.tight_layout()
     return fig
 
+
+# -----------------------------
+# Report generation helpers
+# -----------------------------
+def fig_to_png_bytes(fig, dpi=180):
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
+    buf.seek(0)
+    return buf
+
+
+def create_pressure_diagram_figure():
+    fig, axes = plt.subplots(1, 3, figsize=(12, 7), sharey=True)
+    configs = [
+        ("Rankine", pa_rankine, pp_rankine),
+        ("Coulomb", pa_coulomb, pp_coulomb),
+        ("At-Rest", pa_atrest, pa_atrest),
+    ]
+    for ax, (title, pa, pp) in zip(axes, configs):
+        ax.plot(-pa, depths, lw=2.0, label="Active / At-Rest")
+        ax.plot(pp, depths, lw=2.0, ls="--", label="Passive")
+        ax.axvline(0, lw=0.8)
+        ax.invert_yaxis()
+        ax.set_title(title)
+        ax.set_xlabel("Pressure (psf)")
+        ax.grid(True, alpha=0.3, linestyle="--")
+        ax.legend(fontsize=8)
+    axes[0].set_ylabel("Depth (ft)")
+    fig.suptitle("Lateral Earth Pressure Diagrams")
+    fig.tight_layout()
+    return fig
+
+
+def create_active_comparison_figure():
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.plot(pa_rankine, depths, lw=2.2, label="Rankine Active")
+    ax.plot(pa_coulomb, depths, lw=2.2, ls="--", label="Coulomb Active")
+    ax.plot(pa_atrest, depths, lw=2.2, ls=":", label="At-Rest")
+    if surcharge_type != "None":
+        ax.plot(pa_rankine_plus_surcharge, depths, lw=1.8, ls="-.", label="Rankine + surcharge")
+    ax.invert_yaxis()
+    ax.set_xlabel("Pressure (psf)")
+    ax.set_ylabel("Depth (ft)")
+    ax.set_title("Active / At-Rest Pressure Comparison")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def create_passive_comparison_figure():
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.plot(pp_rankine, depths, lw=2.2, label="Rankine Passive")
+    ax.plot(pp_coulomb, depths, lw=2.2, ls="--", label="Coulomb Passive")
+    ax.invert_yaxis()
+    ax.set_xlabel("Pressure (psf)")
+    ax.set_ylabel("Depth (ft)")
+    ax.set_title("Passive Pressure Comparison")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def create_surcharge_figure():
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.plot(sur_r, depths, lw=2.2, label="Rankine/rigid")
+    if surcharge_type in ["Uniform", "AASHTO"]:
+        ax.plot(sur_c, depths, lw=2.2, ls="--", label="Coulomb")
+        ax.plot(sur_0, depths, lw=2.2, ls=":", label="At-Rest")
+    ax.invert_yaxis()
+    ax.set_xlabel("Surcharge Pressure (psf)")
+    ax.set_ylabel("Depth (ft)")
+    ax.set_title("Separate Surcharge Pressure")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def report_table_df():
+    idx = np.linspace(0, len(depths) - 1, min(30, len(depths)), dtype=int)
+    return pd.DataFrame({
+        "Depth (ft)": np.round(depths[idx], 2),
+        "Layer": [layer_index_at_depth(float(z)) + 1 for z in depths[idx]],
+        "sigma_v eff (psf)": np.round(sigma_v_eff[idx], 1),
+        "u water (psf)": np.round(u_water[idx], 1),
+        "Ka Rankine": np.round(Ka_r[idx], 3),
+        "Ka Coulomb": np.round(Ka_c[idx], 3),
+        "Rankine active (psf)": np.round(pa_rankine[idx], 1),
+        "Coulomb active (psf)": np.round(pa_coulomb[idx], 1),
+        "At-rest (psf)": np.round(pa_atrest[idx], 1),
+        "Surcharge R (psf)": np.round(sur_r[idx], 1),
+        "Rankine passive (psf)": np.round(pp_rankine[idx], 1),
+        "Coulomb passive (psf)": np.round(pp_coulomb[idx], 1),
+    })
+
+
+def summary_table_df():
+    return pd.DataFrame({
+        "Method": ["Rankine", "Coulomb", "At-Rest"],
+        "Earth/Water resultant (kips/ft)": [f"{Fa_r:.2f}", f"{Fa_c:.2f}", f"{Fa_0:.2f}"],
+        "Height above base (ft)": [f"{ha_r:.2f}", f"{ha_c:.2f}", f"{ha_0:.2f}"],
+        "Surcharge resultant (kips/ft)": [f"{Fs_r:.2f}", f"{Fs_c:.2f}", f"{Fs_0:.2f}"],
+        "Combined resultant (kips/ft)": [f"{Ft_r:.2f}", f"{Ft_c:.2f}", f"{Ft_0:.2f}"],
+        "Passive resultant (kips/ft)": [f"{Fp_r:.2f}", f"{Fp_c:.2f}", "--"],
+    })
+
+
+def add_df_to_doc(doc, df, max_rows=None):
+    if max_rows is not None:
+        df = df.head(max_rows)
+    table = doc.add_table(rows=1, cols=len(df.columns))
+    table.style = "Table Grid"
+    hdr = table.rows[0].cells
+    for j, col in enumerate(df.columns):
+        hdr[j].text = str(col)
+    for _, row in df.iterrows():
+        cells = table.add_row().cells
+        for j, val in enumerate(row):
+            cells[j].text = str(val)
+    return table
+
+
+def generate_word_report(template_bytes=None, meta=None):
+    from docx import Document
+    from docx.shared import Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    meta = meta or {}
+    template_name = "TSG Technical MEMO 2026.docx"
+    if template_bytes is not None:
+        doc = Document(BytesIO(template_bytes))
+    elif os.path.exists(template_name):
+        doc = Document(template_name)
+    elif os.path.exists(os.path.join(os.getcwd(), template_name)):
+        doc = Document(os.path.join(os.getcwd(), template_name))
+    elif os.path.exists(os.path.join("/mnt/data", template_name)):
+        doc = Document(os.path.join("/mnt/data", template_name))
+    else:
+        doc = Document()
+
+    doc.add_page_break()
+    title = doc.add_heading("Lateral Earth Pressure Calculation Report", level=1)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run(f"Date: {meta.get('date', date.today().isoformat())}").bold = True
+
+    doc.add_heading("Memorandum Information", level=2)
+    info = pd.DataFrame({
+        "Item": ["To", "Cc", "From", "Project", "Subject"],
+        "Value": [meta.get("to", ""), meta.get("cc", ""), meta.get("from", ""), meta.get("project", ""), meta.get("subject", "")],
+    })
+    add_df_to_doc(doc, info)
+
+    doc.add_heading("Executive Summary", level=2)
+    doc.add_paragraph(
+        "This report summarizes the lateral earth pressure calculation for the wall geometry, layered backfill, groundwater condition, passive pressure zone, and surcharge loading entered in the Streamlit calculator. "
+        "The calculation reports active, at-rest, passive, surcharge-only, and combined lateral pressure diagrams in English units."
+    )
+
+    doc.add_heading("Input Parameters", level=2)
+    input_df = pd.DataFrame({
+        "Parameter": ["Wall height H", "Wall inclination alpha", "Backfill slope beta", "Wall friction delta", "Passive pressure start depth", "Water table", "Water unit weight", "Surcharge type"],
+        "Value": [f"{H:.2f} ft", f"{alpha_deg:.2f} deg", f"{beta_deg:.2f} deg", f"{delta_deg:.2f} deg", f"{passive_start_depth:.2f} ft", f"{water_table:.2f} ft" if include_water else "Not included", f"{gamma_w:.1f} pcf" if include_water else "N/A", surcharge_label],
+    })
+    add_df_to_doc(doc, input_df)
+
+    doc.add_paragraph("Table 1: Soil layer properties.")
+    layer_report = layer_df.copy()
+    layer_report.insert(0, "Top Depth (ft)", [0.0] + list(layer_report["Bottom Depth (ft)"].iloc[:-1]))
+    add_df_to_doc(doc, layer_report)
+
+    doc.add_heading("Theory and Calculation Method", level=2)
+    theory_items = [
+        "Vertical stress is calculated by summing the unit weight of each layer down to the calculation depth. Above the water table, moist unit weight is used; below the water table, saturated unit weight and hydrostatic pore pressure are used to compute effective vertical stress.",
+        "Rankine active pressure is calculated as p'a = Ka sigma'v - 2c sqrt(Ka), with negative net active pressure clipped to zero.",
+        "Coulomb active pressure uses wall inclination, wall friction, and backfill slope in the coefficient calculation.",
+        "At-rest pressure uses a Jaky-type coefficient, K0 = (1 - sin(phi))(1 + sin(beta)).",
+        "Passive pressure in this calculator is based on Kp = 1/Ka for the selected method and starts only below the user-defined passive pressure start depth.",
+        "Water pressure is added separately when total pressure is selected.",
+        "Surcharge pressure is calculated separately from earth pressure. FHWA/WALLPRES strip loading and AASHTO 2:1 footing/point-load distribution are included as separate surcharge methods when selected.",
+    ]
+    for item in theory_items:
+        doc.add_paragraph(item, style="List Bullet")
+
+    doc.add_heading("Figures", level=2)
+    figures = [
+        ("Figure 1: Input geometry schematic.", create_geometry_figure()),
+        ("Figure 2: Lateral earth pressure diagrams.", create_pressure_diagram_figure()),
+        ("Figure 3: Active and at-rest pressure comparison.", create_active_comparison_figure()),
+        ("Figure 4: Passive pressure comparison.", create_passive_comparison_figure()),
+    ]
+    if surcharge_type != "None":
+        figures.append(("Figure 5: Separate surcharge pressure diagram.", create_surcharge_figure()))
+    for caption, fig in figures:
+        doc.add_paragraph(caption)
+        buf = fig_to_png_bytes(fig)
+        doc.add_picture(buf, width=Inches(6.5))
+        plt.close(fig)
+
+    doc.add_heading("Results", level=2)
+    doc.add_paragraph("Table 2: Summary of resultants.")
+    add_df_to_doc(doc, summary_table_df())
+    doc.add_paragraph("Table 3: Pressure values at selected depths.")
+    add_df_to_doc(doc, report_table_df())
+
+    doc.add_heading("Limitations", level=2)
+    doc.add_paragraph(
+        "The results are based on classical earth pressure methods and the input parameters entered by the user. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
+    )
+
+    out = BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out.getvalue()
+
 # -----------------------------
 # Results UI
 # -----------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["📐 Results & Diagrams", "📊 Comparison Charts", "📋 Formulas & Notes", "🔢 Detailed Tables"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📐 Results & Diagrams", "📊 Comparison Charts", "📋 Formulas & Notes", "🔢 Detailed Tables", "📝 Report"])
 
 with tab1:
     st.subheader("Input Geometry Based on Current Parameters")
@@ -944,6 +1165,51 @@ with tab4:
         st.download_button("⬇️ Download Pressure Table (CSV)", df.to_csv(index=False), "pressure_data_english.csv", "text/csv")
     with col_dl2:
         st.download_button("⬇️ Download Summary Table (CSV)", summary.to_csv(index=False), "summary_results_english.csv", "text/csv")
+
+
+with tab5:
+    st.subheader("Generate Technical Memorandum Report")
+    st.caption("The report uses the TSG technical memo format when a template is uploaded or when 'TSG Technical MEMO 2026.docx' is available beside the app file.")
+
+    col_meta1, col_meta2 = st.columns(2)
+    with col_meta1:
+        report_date = st.date_input("Report Date", value=date.today())
+        report_to = st.text_input("To", value="")
+        report_cc = st.text_input("Cc", value="")
+    with col_meta2:
+        report_from = st.text_input("From", value="")
+        report_project = st.text_input("Project", value="Project")
+        report_subject = st.text_input("Subject", value="Lateral Earth Pressure Calculation")
+
+    uploaded_template = st.file_uploader("Optional Word template (.docx)", type=["docx"])
+
+    if st.button("📝 Generate Word Report", use_container_width=True):
+        try:
+            template_bytes = uploaded_template.getvalue() if uploaded_template is not None else None
+            report_bytes = generate_word_report(
+                template_bytes=template_bytes,
+                meta={
+                    "date": report_date.isoformat(),
+                    "to": report_to,
+                    "cc": report_cc,
+                    "from": report_from,
+                    "project": report_project,
+                    "subject": report_subject,
+                },
+            )
+            st.session_state["generated_report_bytes"] = report_bytes
+            st.success("Report generated successfully.")
+        except Exception as exc:
+            st.error(f"Could not generate report: {exc}")
+
+    if "generated_report_bytes" in st.session_state:
+        st.download_button(
+            "⬇️ Download Word Report",
+            data=st.session_state["generated_report_bytes"],
+            file_name="lateral_earth_pressure_report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+        )
 
 st.markdown("---")
 st.markdown("""
