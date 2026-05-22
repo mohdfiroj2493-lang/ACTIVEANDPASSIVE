@@ -575,7 +575,7 @@ Fp_c, hp_c = resultant(pp_coulomb, depths)
 # Input geometry schematic
 # -----------------------------
 def create_geometry_figure():
-    """Creates a schematic based on the current input geometry, layers, water table, passive zone, and surcharge."""
+    """Creates a schematic based on the current input geometry, soil layers, water table, and surcharge."""
     fig, ax = plt.subplots(figsize=(11, 6.5))
     fig.patch.set_facecolor("#f8fafc")
     ax.set_facecolor("#f8fafc")
@@ -617,27 +617,61 @@ def create_geometry_figure():
     # Backfill surface.
     ax.plot([0, x_right], [0, y_surface_right], color="#78350f", lw=2.5, label=f"Backfill slope β = {beta_deg:.2f}°")
 
-    # Layer boundaries and labels.
+    # Layer boundaries and labels. Use different fill colors so each soil layer is visible.
     top_depth = 0.0
-    layer_colors = ["#fef3c7", "#fde68a", "#fed7aa", "#fdba74", "#fcd34d", "#fbbf24", "#f59e0b", "#d97706"]
+    layer_colors = [
+        "#fef3c7", "#dbeafe", "#dcfce7", "#fee2e2",
+        "#ede9fe", "#ffedd5", "#cffafe", "#fce7f3"
+    ]
+
+    def draw_soil_layer(i, row, y1, y2, extended=False):
+        """Draw one layer interval and label its soil parameters."""
+        x_wall_y1 = y1 * tan_alpha
+        x_wall_y2 = y2 * tan_alpha
+        ax.fill(
+            [x_wall_y1, x_right, x_right, x_wall_y2],
+            [y1, y1, y2, y2],
+            color=layer_colors[i % len(layer_colors)],
+            alpha=0.42,
+            ec="#e2e8f0",
+            lw=0.6,
+            label="Soil layer" if i == 0 else None,
+        )
+        if y2 < h:
+            ax.hlines(y2, xmin=y2 * tan_alpha, xmax=x_right, colors="#64748b", linestyles="--", lw=1.0)
+
+        mid = 0.5 * (y1 + y2)
+        gamma_m = float(row["Moist Unit Weight γm (pcf)"])
+        gamma_sat = float(row["Saturated Unit Weight γsat (pcf)"])
+        phi_i = float(row["Friction Angle φ (deg)"])
+        c_i = float(row["Cohesion c (psf)"])
+        label_suffix = " (extended)" if extended else ""
+        ax.text(
+            x_right * 0.72,
+            mid,
+            f"Layer {i + 1}{label_suffix}\nγm={gamma_m:.0f} pcf, γsat={gamma_sat:.0f} pcf\nφ={phi_i:.0f}°, c={c_i:.0f} psf",
+            fontsize=8,
+            color="#334155",
+            ha="left",
+            va="center",
+            bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#cbd5e1", alpha=0.82),
+        )
+
+    last_row = None
+    last_i = 0
     for i, row in layer_df.iterrows():
         bottom_depth = min(float(row["Bottom Depth (ft)"]), h)
         if bottom_depth <= top_depth:
             continue
-        # Fill each horizontal layer slice behind the wall.
-        y1, y2 = top_depth, bottom_depth
-        x_wall_y1 = y1 * tan_alpha
-        x_wall_y2 = y2 * tan_alpha
-        ax.fill([x_wall_y1, x_right, x_right, x_wall_y2], [y1, y1 - x_right * 0.0, y2, y2],
-                color=layer_colors[i % len(layer_colors)], alpha=0.10)
-        if bottom_depth < h:
-            ax.hlines(bottom_depth, xmin=bottom_depth * tan_alpha, xmax=x_right,
-                      colors="#64748b", linestyles="--", lw=1.0)
-        mid = 0.5 * (top_depth + bottom_depth)
-        ax.text(x_right * 0.72, mid, f"Layer {i + 1}\nφ={float(row['Friction Angle φ (deg)']):.0f}°, c={float(row['Cohesion c (psf)']):.0f} psf",
-                fontsize=8, color="#334155", ha="left", va="center",
-                bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#cbd5e1", alpha=0.75))
+        draw_soil_layer(i, row, top_depth, bottom_depth)
         top_depth = bottom_depth
+        last_row = row
+        last_i = i
+
+    # If the final entered layer bottom is above the wall base, show that
+    # the final layer's properties are extended to the base for calculation.
+    if top_depth < h and last_row is not None:
+        draw_soil_layer(last_i, last_row, top_depth, h, extended=True)
 
     # Water table.
     if include_water:
