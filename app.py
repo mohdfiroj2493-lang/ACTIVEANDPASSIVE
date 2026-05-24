@@ -231,7 +231,7 @@ with st.sidebar:
             aashto_Pv = st.number_input("Point load P'v (lb)", 0.0, 5000000.0, 50000.0, 1000.0)
             aashto_bf = 0.0
             aashto_L = 0.0
-            st.caption("AASHTO point load: bf = 0. Pressure is zero at ground surface, increases to the wall-intercept depth z2 = 2d, then decays using Δσv = P'v / D1². Lateral surcharge Δp = K × Δσv.")
+            st.caption("AASHTO 2:1 distribution for point load: bf = 0, calculate D1 the same way as isolated footing, then Δσv = P'v / D1² and Δp = K × Δσv.")
         st.caption("D1 is computed from the AASHTO sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d.")
 
     st.subheader("📊 Display Options")
@@ -403,41 +403,37 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
     if stype == "Uniform":
         p = K_arr * q
     elif stype == "AASHTO":
-        bf = max(float(aashto_bf), 0.0)
+        bf_input = max(float(aashto_bf), 0.0)
         d = max(float(aashto_d), 0.0)
         L = max(float(aashto_L), 0.0)
         Pv = max(float(aashto_Pv), 0.0)
-        z2 = max(0.0, 2.0 * d - bf)
+
+        # AASHTO/FHWA 2:1 distribution method.
+        # Point load is treated the same as isolated footing, except bf = 0
+        # and vertical stress is Delta sigma_v = P'v / D1^2.
+        bf_calc = 0.0 if aashto_load_type == "Point load" else bf_input
+        z2 = max(0.0, 2.0 * d - bf_calc)
+
         for i, z in enumerate(z_arr):
-            # Do not skip z = 0. For the AASHTO 2:1 method, the surcharge
-            # pressure at the ground surface can be nonzero because D1 = bf at z = 0.
             if Pv <= 0:
                 continue
-            if aashto_load_type == "Point load":
-                # AASHTO/FHWA 2:1 point-load distribution.
-                # For point load, bf = 0 and z2 = 2d. The load spread first reaches
-                # the back of wall at z2; surcharge at the wall is taken as zero at
-                # z = 0, increases linearly to the peak at z2, then decays with D1^2.
-                z2_point = 2.0 * d
-                if z <= 0.0 or z2_point <= 0.0:
-                    delta_sigma_v = 0.0
-                elif z <= z2_point:
-                    D1_peak = max(z2_point, 1e-6)
-                    delta_sigma_peak = Pv / (D1_peak ** 2)
-                    delta_sigma_v = delta_sigma_peak * (z / z2_point)
-                else:
-                    D1 = (z / 2.0) + d
-                    delta_sigma_v = Pv / (max(D1, 1e-6) ** 2)
+
+            if z <= z2:
+                D1 = bf_calc + z
             else:
-                if z <= z2:
-                    D1 = bf + z
-                else:
-                    D1 = (bf + z) / 2.0 + d
-                D1 = max(D1, 1e-6)
-                if aashto_load_type == "Strip footing":
-                    delta_sigma_v = Pv / D1
-                else:
-                    delta_sigma_v = Pv / (D1 * max(L + z, 1e-6))
+                D1 = (bf_calc + z) / 2.0 + d
+
+            # For point load with bf = 0 at z = 0, D1 = 0 and P/D1^2 is singular.
+            # Use zero at the exact surface point only to avoid an infinite plotted value.
+            if D1 <= 0:
+                delta_sigma_v = 0.0
+            elif aashto_load_type == "Strip footing":
+                delta_sigma_v = Pv / D1
+            elif aashto_load_type == "Isolated rectangular footing":
+                delta_sigma_v = Pv / (D1 * max(L + z, 1e-6))
+            else:
+                delta_sigma_v = Pv / (D1 ** 2)
+
             p[i] = K_arr[i] * delta_sigma_v
     elif stype == "Line Load":
         for i, z in enumerate(z_arr):
@@ -1242,7 +1238,7 @@ with tab3:
 - Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
 - Surcharge pressure is calculated separately and is not mixed into the basic earth-pressure resultants.
 - For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
-- For AASHTO strip and isolated footing surcharge, the app follows the 2:1 effective-width method shown in your sketch: z2 = 2d - bf; for z <= z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d. For AASHTO point load, bf = 0, pressure at the wall is zero at z = 0, increases to the wall-intercept depth z2 = 2d, then decreases with Delta sigma_v = P'v / D1^2. It calculates Delta sigma_v separately and then applies Delta p = K x Delta sigma_v.
+- For AASHTO surcharge, the app follows the 2:1 effective-width method shown in your sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d. The calculation does not force surcharge pressure to zero at z = 0; when bf > 0, D1 = bf at the ground surface. It calculates Δσv separately and then applies Δp = K × Δσv. For point load, bf is set to 0 and Δσv = P'v / D1².
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
 
 ### English-unit conventions
