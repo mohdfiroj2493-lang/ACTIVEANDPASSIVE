@@ -232,7 +232,7 @@ with st.sidebar:
             aashto_bf = 0.0
             aashto_L = 0.0
             st.caption("AASHTO 2:1 distribution for point load: use bf = 0 and Δσv = P'v / D1², then lateral surcharge Δp = K × Δσv.")
-        st.caption("D1 is computed from the AASHTO sketch: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d. For point load, bf = 0.")
+        st.caption("AASHTO surcharge pressure is set to zero above z2. Below z2: z2 = 2d - bf and D1 = (bf + z)/2 + d. For point load, bf = 0.")
 
     st.subheader("📊 Display Options")
     n_points = st.slider("Pressure Diagram Points", 50, 500, 151)
@@ -393,14 +393,10 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
 
     AASHTO option uses the 2:1 effective-width method from the user-provided
     sketch for strip footings, isolated rectangular footings, and concentrated
-    point loads:
-    z2 = 2d - bf; for z <= z2, D1 = bf + z; for z > z2,
-    D1 = (bf + z)/2 + d. For point loads, bf = 0 and Δσv = P'v / D1².
-    At z = 0, strip and isolated footing pressure is not forced to zero;
-    D1 = bf, so a footing surcharge can produce a nonzero wall pressure at
-    the top. For an AASHTO point load, the expression is undefined at z = 0,
-    so the app leaves the top point as zero and evaluates the formula below it.
-    Vertical stress is converted to lateral surcharge as Δp = K × Δσv.
+    point loads. The surcharge pressure is set to zero above z2. Below z2:
+    z2 = 2d - bf and D1 = (bf + z)/2 + d. For point loads, bf = 0 and
+    Δσv = P'v / D1². Vertical stress is converted to lateral surcharge as
+    Δp = K × Δσv.
     """
     p = np.zeros_like(z_arr, dtype=float)
     if K_arr is None:
@@ -414,14 +410,11 @@ def surcharge_pressure(z_arr, stype, q=0, Q=0, x=1, K_arr=None, x1=0.0, width=0.
         Pv = max(float(aashto_Pv), 0.0)
         z2 = max(0.0, 2.0 * d - bf)
         for i, z in enumerate(z_arr):
-            # Do not skip z = 0. For the AASHTO 2:1 method, the surcharge
-            # pressure at the ground surface can be nonzero because D1 = bf at z = 0.
-            if Pv <= 0:
+            # Per the requested AASHTO implementation, surcharge pressure is
+            # zero above z2 and is calculated only below z2.
+            if Pv <= 0 or z <= z2:
                 continue
-            if z <= z2:
-                D1 = bf + z
-            else:
-                D1 = (bf + z) / 2.0 + d
+            D1 = (bf + z) / 2.0 + d
             D1 = max(D1, 1e-6)
             if aashto_load_type == "Strip footing":
                 delta_sigma_v = Pv / D1
@@ -1240,7 +1233,7 @@ with tab3:
 - Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
 - Surcharge pressure is calculated separately and is not mixed into the basic earth-pressure resultants.
 - For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
-- For AASHTO surcharge, the app follows the 2:1 effective-width method shown in your sketch for strip footings, isolated rectangular footings, and point loads: z2 = 2d - bf; for z ≤ z2, D1 = bf + z; for z > z2, D1 = (bf + z)/2 + d. For strip footing, Δσv = Pv / D1. For isolated rectangular footing, Δσv = P'v / [D1(L+z)]. For point load, bf = 0 and Δσv = P'v / D1². It calculates Δσv separately and then applies Δp = K × Δσv. The point-load equation is undefined at z = 0, so the app leaves the top point as zero and evaluates the formula below it.
+- For AASHTO surcharge, the app sets surcharge pressure to zero above z2 and calculates it only below z2. Below z2, z2 = 2d - bf and D1 = (bf + z)/2 + d. For strip footing, Δσv = Pv / D1. For isolated rectangular footing, Δσv = P'v / [D1(L+z)]. For point load, bf = 0 and Δσv = P'v / D1². It calculates Δσv separately and then applies Δp = K × Δσv.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
 
 ### English-unit conventions
