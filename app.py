@@ -7,7 +7,7 @@ from datetime import date
 import os
 
 st.set_page_config(
-    page_title="Lateral Earth Pressure Calculator - English Units",
+    page_title="Lateral Earth Pressure and Deflection Calculator - English Units",
     page_icon="🏗️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -21,8 +21,8 @@ st.markdown("""
 
 st.markdown("""
 <div class="main-header">
-  <h1>🏗️ Lateral Earth Pressure Calculator</h1>
-  <p>English Units · Multi-Layer Soil · Water Table · Rankine · Coulomb · At-Rest · Surcharge</p>
+  <h1>🏗️ Lateral Earth Pressure and Deflection Calculator</h1>
+  <p>English Units · Multi-Layer Soil · Water Table · Rankine · Coulomb · At-Rest · Surcharge · Elastic Deflection</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -233,6 +233,39 @@ with st.sidebar:
             aashto_L = 0.0
             st.caption("AASHTO 2:1 distribution for point load: use bf = 0 and Δσv = P'v / D1², then lateral surcharge Δp = K × Δσv.")
         st.caption("AASHTO surcharge pressure is set to zero above z2. Below z2: z2 = 2d - bf and D1 = (bf + z)/2 + d. For point load, bf = 0.")
+
+    st.subheader("📐 Pile / Wall Flexural Properties")
+    youngs_modulus_ksi = st.number_input(
+        "Young's Modulus E (ksi)",
+        min_value=1.0,
+        max_value=100000.0,
+        value=29000.0,
+        step=100.0,
+        format="%.1f",
+        help="Elastic modulus of the pile or wall section. Steel is commonly entered as approximately 29,000 ksi.",
+    )
+    moment_of_inertia_in4 = st.number_input(
+        "Moment of Inertia I (in⁴)",
+        min_value=0.01,
+        max_value=1.0e9,
+        value=5000.0,
+        step=100.0,
+        format="%.2f",
+        help="Gross or effective flexural moment of inertia of one pile or the selected wall strip.",
+    )
+    pile_tributary_width_ft = st.number_input(
+        "Pile Tributary Width / Spacing (ft)",
+        min_value=0.01,
+        max_value=100.0,
+        value=1.0,
+        step=0.5,
+        format="%.2f",
+        help="Converts wall pressure in psf to the line load carried by one pile. Use pile spacing for a discrete pile wall; use 1.0 ft for a one-foot wall strip.",
+    )
+    st.caption(
+        "Deflection is calculated by integrating M/EI for an elastic cantilever fixed at the wall base and free at the top. "
+        "The imposed passive-pressure diagram is not iterated with movement."
+    )
 
     st.subheader("📊 Display Options")
     n_points = st.slider("Pressure Diagram Points", 50, 500, 151)
@@ -602,6 +635,7 @@ net_pressure_rankine = pa_rankine_plus_surcharge - pp_rankine
 net_pressure_coulomb = pa_coulomb_plus_surcharge - pp_coulomb
 
 def cumulative_trapezoid_np(y, x):
+    """Cumulative trapezoidal integral from the first coordinate to each point."""
     y = np.asarray(y, dtype=float)
     x = np.asarray(x, dtype=float)
     out = np.zeros_like(y, dtype=float)
@@ -611,7 +645,20 @@ def cumulative_trapezoid_np(y, x):
         out[1:] = np.cumsum(area)
     return out
 
-# Shear and moment are calculated along the pile/wall length from the top downward.
+
+def reverse_cumulative_trapezoid_np(y, x):
+    """Integral from the last coordinate (fixed base) back to each point."""
+    y = np.asarray(y, dtype=float)
+    x = np.asarray(x, dtype=float)
+    out = np.zeros_like(y, dtype=float)
+    if len(y) > 1:
+        dx = np.diff(x)
+        for i in range(len(y) - 2, -1, -1):
+            out[i] = out[i + 1] - 0.5 * (y[i + 1] + y[i]) * dx[i]
+    return out
+
+
+# Shear and moment are calculated along the pile/wall length from the free top downward.
 # Pressure is psf = lb/ft of wall height per ft wall width.
 # Shear output: kips/ft wall width. Moment output: kip-ft/ft wall width.
 shear_rankine = cumulative_trapezoid_np(net_pressure_rankine, depths) / 1000.0
@@ -619,10 +666,40 @@ shear_coulomb = cumulative_trapezoid_np(net_pressure_coulomb, depths) / 1000.0
 moment_rankine = cumulative_trapezoid_np(shear_rankine, depths)
 moment_coulomb = cumulative_trapezoid_np(shear_coulomb, depths)
 
+
+def calculate_cantilever_deflection(moment_kip_ft_per_ft):
+    """Return curvature, rotation, and deflection for a base-fixed elastic pile/wall.
+
+    The pressure calculation produces moment per foot of wall. Multiplying by
+    pile_tributary_width_ft gives the bending moment carried by one pile or the
+    selected wall strip. E is entered in ksi (kip/in^2), I in in^4, and the
+    integration coordinate is converted to inches.
+    """
+    depth_in = depths * 12.0
+    EI_kip_in2 = max(float(youngs_modulus_ksi) * float(moment_of_inertia_in4), 1.0e-12)
+    moment_kip_in = np.asarray(moment_kip_ft_per_ft, dtype=float) * float(pile_tributary_width_ft) * 12.0
+    curvature_per_in = moment_kip_in / EI_kip_in2
+
+    # Fixed-base boundary conditions at z = H:
+    # rotation(H) = 0 and deflection(H) = 0.
+    rotation_rad = reverse_cumulative_trapezoid_np(curvature_per_in, depth_in)
+    deflection_in = reverse_cumulative_trapezoid_np(rotation_rad, depth_in)
+    return curvature_per_in, rotation_rad, deflection_in
+
+
+curvature_rankine, rotation_rankine, deflection_rankine = calculate_cantilever_deflection(moment_rankine)
+curvature_coulomb, rotation_coulomb, deflection_coulomb = calculate_cantilever_deflection(moment_coulomb)
+
 max_abs_shear_rankine = float(np.max(np.abs(shear_rankine))) if len(shear_rankine) else 0.0
 max_abs_shear_coulomb = float(np.max(np.abs(shear_coulomb))) if len(shear_coulomb) else 0.0
 max_abs_moment_rankine = float(np.max(np.abs(moment_rankine))) if len(moment_rankine) else 0.0
 max_abs_moment_coulomb = float(np.max(np.abs(moment_coulomb))) if len(moment_coulomb) else 0.0
+max_abs_deflection_rankine = float(np.max(np.abs(deflection_rankine))) if len(deflection_rankine) else 0.0
+max_abs_deflection_coulomb = float(np.max(np.abs(deflection_coulomb))) if len(deflection_coulomb) else 0.0
+max_deflection_depth_rankine = float(depths[int(np.argmax(np.abs(deflection_rankine)))]) if len(deflection_rankine) else 0.0
+max_deflection_depth_coulomb = float(depths[int(np.argmax(np.abs(deflection_coulomb)))]) if len(deflection_coulomb) else 0.0
+top_deflection_rankine = float(deflection_rankine[0]) if len(deflection_rankine) else 0.0
+top_deflection_coulomb = float(deflection_coulomb[0]) if len(deflection_coulomb) else 0.0
 
 
 # -----------------------------
@@ -914,7 +991,7 @@ def create_surcharge_figure():
 
 
 def create_net_shear_moment_figure():
-    fig, axes = plt.subplots(1, 3, figsize=(15, 6), sharey=True)
+    fig, axes = plt.subplots(1, 4, figsize=(19, 6), sharey=True)
 
     axes[0].plot(net_pressure_rankine, depths, lw=2.2, label="Rankine net")
     axes[0].plot(net_pressure_coulomb, depths, lw=2.2, ls="--", label="Coulomb net")
@@ -934,6 +1011,12 @@ def create_net_shear_moment_figure():
     axes[2].axvline(0, color="#334155", lw=0.8)
     axes[2].set_xlabel("Moment M (kip-ft/ft)")
     axes[2].set_title("Moment Diagram")
+
+    axes[3].plot(deflection_rankine, depths, lw=2.2, label="Rankine")
+    axes[3].plot(deflection_coulomb, depths, lw=2.2, ls="--", label="Coulomb")
+    axes[3].axvline(0, color="#334155", lw=0.8)
+    axes[3].set_xlabel("Deflection y (in)")
+    axes[3].set_title("Elastic Deflection")
 
     for ax in axes:
         ax.invert_yaxis()
@@ -966,6 +1049,10 @@ def report_table_df():
         "Coulomb shear (kips/ft)": np.round(shear_coulomb[idx], 3),
         "Rankine moment (kip-ft/ft)": np.round(moment_rankine[idx], 3),
         "Coulomb moment (kip-ft/ft)": np.round(moment_coulomb[idx], 3),
+        "Rankine rotation (rad)": np.round(rotation_rankine[idx], 6),
+        "Coulomb rotation (rad)": np.round(rotation_coulomb[idx], 6),
+        "Rankine deflection (in)": np.round(deflection_rankine[idx], 4),
+        "Coulomb deflection (in)": np.round(deflection_coulomb[idx], 4),
     })
 
 
@@ -979,6 +1066,8 @@ def summary_table_df():
         "Passive resultant (kips/ft)": [f"{Fp_r:.2f}", f"{Fp_c:.2f}", "--"],
         "Max abs shear (kips/ft)": [f"{max_abs_shear_rankine:.2f}", f"{max_abs_shear_coulomb:.2f}", "--"],
         "Max abs moment (kip-ft/ft)": [f"{max_abs_moment_rankine:.2f}", f"{max_abs_moment_coulomb:.2f}", "--"],
+        "Top deflection (in)": [f"{top_deflection_rankine:.3f}", f"{top_deflection_coulomb:.3f}", "--"],
+        "Max abs deflection (in)": [f"{max_abs_deflection_rankine:.3f}", f"{max_abs_deflection_coulomb:.3f}", "--"],
     })
 
 
@@ -1016,7 +1105,7 @@ def generate_word_report(template_bytes=None, meta=None):
         doc = Document()
 
     doc.add_page_break()
-    title = doc.add_heading("Lateral Earth Pressure Calculation Report", level=1)
+    title = doc.add_heading("Lateral Earth Pressure and Deflection Calculation Report", level=1)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1032,13 +1121,14 @@ def generate_word_report(template_bytes=None, meta=None):
     doc.add_heading("Executive Summary", level=2)
     doc.add_paragraph(
         "This report summarizes the lateral earth pressure calculation for the wall geometry, layered backfill, groundwater condition, passive pressure zone, and surcharge loading entered in the Streamlit calculator. "
-        "The calculation reports active, at-rest, passive, surcharge-only, and combined lateral pressure diagrams in English units."
+        "The calculation reports active, at-rest, passive, surcharge-only, and combined lateral pressure diagrams in English units. "
+        "It also estimates elastic pile/wall rotation and deflection from the calculated bending-moment diagram using the entered E and I values."
     )
 
     doc.add_heading("Input Parameters", level=2)
     input_df = pd.DataFrame({
-        "Parameter": ["Wall height H", "Wall inclination alpha", "Backfill slope beta", "Wall friction delta", "Passive pressure start depth", "Water table", "Water unit weight", "Surcharge type"],
-        "Value": [f"{H:.2f} ft", f"{alpha_deg:.2f} deg", f"{beta_deg:.2f} deg", f"{delta_deg:.2f} deg", f"{passive_start_depth:.2f} ft", f"{water_table:.2f} ft" if include_water else "Not included", f"{gamma_w:.1f} pcf" if include_water else "N/A", surcharge_label],
+        "Parameter": ["Wall height H", "Wall inclination alpha", "Backfill slope beta", "Wall friction delta", "Passive pressure start depth", "Water table", "Water unit weight", "Surcharge type", "Young's modulus E", "Moment of inertia I", "Pile tributary width / spacing"],
+        "Value": [f"{H:.2f} ft", f"{alpha_deg:.2f} deg", f"{beta_deg:.2f} deg", f"{delta_deg:.2f} deg", f"{passive_start_depth:.2f} ft", f"{water_table:.2f} ft" if include_water else "Not included", f"{gamma_w:.1f} pcf" if include_water else "N/A", surcharge_label, f"{youngs_modulus_ksi:.1f} ksi", f"{moment_of_inertia_in4:.2f} in^4", f"{pile_tributary_width_ft:.2f} ft"],
     })
     add_df_to_doc(doc, input_df)
 
@@ -1056,6 +1146,7 @@ def generate_word_report(template_bytes=None, meta=None):
         "Passive effective soil pressure is calculated explicitly as p'p = sigma'v/Ka + 2c sqrt(1/Ka), beginning at the user-defined passive pressure start depth. The cohesion term is included only when the cohesion checkbox is selected.",
         "Passive total pressure is calculated as passive effective soil pressure plus pore-water pressure when total pressure is selected.",
         "Surcharge pressure is calculated separately from earth pressure. FHWA/WALLPRES strip loading, NAVFAC/Boussinesq point loading, and AASHTO 2:1 strip/isolated footing/point-load distribution are included as separate surcharge methods when selected.",
+        "Elastic deflection is calculated from curvature M/EI. The moment per foot of wall is multiplied by the entered pile tributary width or spacing, converted to kip-in, and integrated from the fixed base using zero base rotation and zero base deflection. Positive deflection is in the active-pressure direction.",
     ]
     def add_safe_bullet(document, text):
         # Some company templates do not include Word's built-in "List Bullet" style.
@@ -1079,7 +1170,7 @@ def generate_word_report(template_bytes=None, meta=None):
     if surcharge_type != "None":
         figures.append((f"Figure {next_fig_num}: Separate surcharge pressure diagram.", create_surcharge_figure()))
         next_fig_num += 1
-    figures.append((f"Figure {next_fig_num}: Net pressure, shear, and moment diagrams along the pile/wall.", create_net_shear_moment_figure()))
+    figures.append((f"Figure {next_fig_num}: Net pressure, shear, moment, and elastic deflection diagrams along the pile/wall.", create_net_shear_moment_figure()))
     for caption, fig in figures:
         doc.add_paragraph(caption)
         buf = fig_to_png_bytes(fig)
@@ -1094,7 +1185,7 @@ def generate_word_report(template_bytes=None, meta=None):
 
     doc.add_heading("Limitations", level=2)
     doc.add_paragraph(
-        "The results are based on classical earth pressure methods and the input parameters entered by the user. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
+        "The results are based on classical earth pressure methods and the input parameters entered by the user. The deflection calculation assumes a linear-elastic Euler-Bernoulli cantilever fixed at the wall base and does not iterate soil pressure with wall movement, include discrete braces or anchors, model nonlinear pile-soil springs, or account for cracking, yielding, shear deformation, construction staging, or second-order effects. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
     )
 
     out = BytesIO()
@@ -1156,6 +1247,16 @@ with tab1:
         if include_water:
             st.markdown(f"<div class='note'>Water pressure is added below <b>{water_table:.2f} ft</b> when total pressure is shown.</div>", unsafe_allow_html=True)
 
+        st.subheader("Elastic Deflection Results")
+        st.markdown(f"""
+        <div class="result-card"><span class="method-badge rankine">Rankine</span><h4>Top y = {top_deflection_rankine:.3f} in</h4><p style="margin:0;font-size:0.85rem;">Maximum |y| = <b>{max_abs_deflection_rankine:.3f} in</b> at depth {max_deflection_depth_rankine:.2f} ft</p></div>
+        <div class="result-card"><span class="method-badge coulomb">Coulomb</span><h4>Top y = {top_deflection_coulomb:.3f} in</h4><p style="margin:0;font-size:0.85rem;">Maximum |y| = <b>{max_abs_deflection_coulomb:.3f} in</b> at depth {max_deflection_depth_coulomb:.2f} ft</p></div>
+        """, unsafe_allow_html=True)
+        st.caption(
+            f"Base fixed; E = {youngs_modulus_ksi:,.1f} ksi, I = {moment_of_inertia_in4:,.2f} in⁴, "
+            f"tributary width/spacing = {pile_tributary_width_ft:.2f} ft."
+        )
+
     with col_diag:
         fig, axes = plt.subplots(1, 3, figsize=(12, 7), sharey=True)
         fig.patch.set_facecolor("#f8fafc")
@@ -1209,19 +1310,26 @@ with tab2:
         ax4.legend(); ax4.grid(True, alpha=0.3); ax4.set_title("Passive Pressure Comparison")
         fig4.tight_layout(); st.pyplot(fig4); plt.close(fig4)
 
-    st.subheader("Net Pressure, Shear, and Moment Along Pile/Wall")
+    st.subheader("Net Pressure, Shear, Moment, and Deflection Along Pile/Wall")
     fig_sm = create_net_shear_moment_figure()
     st.pyplot(fig_sm)
     plt.close(fig_sm)
-    st.caption("Net pressure = active pressure + surcharge pressure - passive pressure. Shear is integrated from the wall top downward; moment is the integral of shear. Units are per foot of wall width.")
+    st.caption(
+        "Net pressure = active pressure + surcharge pressure - passive pressure. Shear is integrated from the free top downward, "
+        "moment is the integral of shear, and deflection is obtained by integrating M/EI from the fixed base. "
+        "Pressure, shear, and moment are reported per foot of wall; pile deflection uses the entered tributary width/spacing. "
+        "Positive deflection is in the active-pressure direction; negative deflection is toward the passive side."
+    )
 
     csm1, csm2 = st.columns(2)
     with csm1:
         st.metric("Max |V| - Rankine", f"{max_abs_shear_rankine:.2f} kips/ft")
         st.metric("Max |M| - Rankine", f"{max_abs_moment_rankine:.2f} kip-ft/ft")
+        st.metric("Max |y| - Rankine", f"{max_abs_deflection_rankine:.3f} in")
     with csm2:
         st.metric("Max |V| - Coulomb", f"{max_abs_shear_coulomb:.2f} kips/ft")
         st.metric("Max |M| - Coulomb", f"{max_abs_moment_coulomb:.2f} kip-ft/ft")
+        st.metric("Max |y| - Coulomb", f"{max_abs_deflection_coulomb:.3f} in")
 
     if surcharge_type != "None":
         st.subheader("Surcharge Pressure - Separate")
@@ -1282,6 +1390,10 @@ with tab3:
 | AASHTO strip load Pv | lb/ft |
 | AASHTO isolated footing P'v | lb |
 | Resultant force | kips/ft |
+| Young's modulus E | ksi |
+| Moment of inertia I | in⁴ |
+| Rotation | radians |
+| Deflection | in |
 
 ### Key formulas
 
@@ -1306,6 +1418,12 @@ Hydrostatic pore pressure:
 $$u = \gamma_w(z-z_w)$$
 
 where $z_w$ is the water table depth.
+
+Elastic beam curvature and deflection:
+
+$$\kappa = \frac{M}{EI}, \qquad \theta = \int \kappa\,dx, \qquad y = \int \theta\,dx$$
+
+The base boundary conditions are $\theta(H)=0$ and $y(H)=0$. The moment used for one pile is the moment per foot of wall multiplied by the entered pile tributary width or spacing. Positive deflection is in the active-pressure direction; negative deflection is toward the passive side.
 """)
 
 with tab4:
@@ -1338,6 +1456,10 @@ with tab4:
         "Coulomb shear (kips/ft)": np.round(shear_coulomb[idx], 3),
         "Rankine moment (kip-ft/ft)": np.round(moment_rankine[idx], 3),
         "Coulomb moment (kip-ft/ft)": np.round(moment_coulomb[idx], 3),
+        "Rankine rotation (rad)": np.round(rotation_rankine[idx], 6),
+        "Coulomb rotation (rad)": np.round(rotation_coulomb[idx], 6),
+        "Rankine deflection (in)": np.round(deflection_rankine[idx], 4),
+        "Coulomb deflection (in)": np.round(deflection_coulomb[idx], 4),
     })
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -1354,6 +1476,9 @@ with tab4:
         "Passive height above base (ft)": [f"{hp_r:.2f}", f"{hp_c:.2f}", "—"],
         "Max |V| (kips/ft)": [f"{max_abs_shear_rankine:.2f}", f"{max_abs_shear_coulomb:.2f}", "—"],
         "Max |M| (kip-ft/ft)": [f"{max_abs_moment_rankine:.2f}", f"{max_abs_moment_coulomb:.2f}", "—"],
+        "Top deflection (in)": [f"{top_deflection_rankine:.3f}", f"{top_deflection_coulomb:.3f}", "—"],
+        "Max |deflection| (in)": [f"{max_abs_deflection_rankine:.3f}", f"{max_abs_deflection_coulomb:.3f}", "—"],
+        "Depth of max |deflection| (ft)": [f"{max_deflection_depth_rankine:.2f}", f"{max_deflection_depth_coulomb:.2f}", "—"],
     })
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
@@ -1411,6 +1536,6 @@ with tab5:
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#64748b;font-size:0.85rem;padding:10px'>
-  🏗️ Lateral Earth Pressure Calculator | English Units | Multi-Layer Soil | Groundwater | Rankine · Coulomb · At-Rest · Separate Surcharge
+  🏗️ Lateral Earth Pressure and Elastic Deflection Calculator | English Units | Multi-Layer Soil | Groundwater | Rankine · Coulomb · At-Rest · Separate Surcharge
 </div>
 """, unsafe_allow_html=True)
