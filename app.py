@@ -523,20 +523,47 @@ pa_coulomb_eff_net = np.clip(pa_coulomb_eff, 0, None)
 pa_atrest_eff_net = np.clip(pa_atrest_eff, 0, None)
 
 passive_mask = depths >= passive_start_depth
-# Passive resistance is also kept as soil/water pressure only. Surcharge is reported separately.
+
+# Passive effective soil pressure is calculated explicitly as sigma'_v / Ka.
+# Because Kp = 1 / Ka, this is equivalent to Kp * sigma'_v for cohesionless soil.
+# The effective vertical stress used here begins at the user-defined passive start depth.
+passive_cohesion_r = (
+    2.0 * c_arr * safe_sqrt(Kp_r)
+    if show_cohesion
+    else np.zeros_like(depths)
+)
+passive_cohesion_c = (
+    2.0 * c_arr * safe_sqrt(Kp_c)
+    if show_cohesion
+    else np.zeros_like(depths)
+)
+
 pp_rankine_eff = np.where(
     passive_mask,
-    Kp_r * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_r),
-    0.0
+    np.divide(
+        sigma_v_eff_passive,
+        Ka_r,
+        out=np.zeros_like(sigma_v_eff_passive),
+        where=Ka_r > 0,
+    ) + passive_cohesion_r,
+    0.0,
 )
 pp_coulomb_eff = np.where(
     passive_mask,
-    Kp_c * sigma_v_eff_passive + 2 * c_arr * safe_sqrt(Kp_c),
-    0.0
+    np.divide(
+        sigma_v_eff_passive,
+        Ka_c,
+        out=np.zeros_like(sigma_v_eff_passive),
+        where=Ka_c > 0,
+    ) + passive_cohesion_c,
+    0.0,
 )
 
-water_component = u_water if show_total_pressure else 0.0
-passive_water_component = u_water_passive if show_total_pressure else 0.0
+# Water pressure is kept separate from effective soil pressure.
+# When total pressure is requested:
+#     passive total pressure = passive effective soil pressure + pore-water pressure.
+water_component = u_water if show_total_pressure else np.zeros_like(depths)
+passive_water_component = u_water_passive if show_total_pressure else np.zeros_like(depths)
 pa_rankine = pa_rankine_eff_net + water_component
 pa_coulomb = pa_coulomb_eff_net + water_component
 pa_atrest = pa_atrest_eff_net + water_component
@@ -929,8 +956,10 @@ def report_table_df():
         "Coulomb active (psf)": np.round(pa_coulomb[idx], 1),
         "At-rest (psf)": np.round(pa_atrest[idx], 1),
         "Surcharge R (psf)": np.round(sur_r[idx], 1),
-        "Rankine passive (psf)": np.round(pp_rankine[idx], 1),
-        "Coulomb passive (psf)": np.round(pp_coulomb[idx], 1),
+        "Rankine passive effective (psf)": np.round(pp_rankine_eff[idx], 1),
+        "Coulomb passive effective (psf)": np.round(pp_coulomb_eff[idx], 1),
+        "Rankine passive total (psf)": np.round(pp_rankine[idx], 1),
+        "Coulomb passive total (psf)": np.round(pp_coulomb[idx], 1),
         "Rankine net pressure (psf)": np.round(net_pressure_rankine[idx], 1),
         "Coulomb net pressure (psf)": np.round(net_pressure_coulomb[idx], 1),
         "Rankine shear (kips/ft)": np.round(shear_rankine[idx], 3),
@@ -1024,8 +1053,8 @@ def generate_word_report(template_bytes=None, meta=None):
         "Rankine active pressure is calculated as p'a = Ka sigma'v - 2c sqrt(Ka), with negative net active pressure clipped to zero.",
         "Coulomb active pressure uses wall inclination, wall friction, and backfill slope in the coefficient calculation.",
         "At-rest pressure uses a Jaky-type coefficient, K0 = (1 - sin(phi))(1 + sin(beta)).",
-        "Passive pressure in this calculator is based on Kp = 1/Ka for the selected method and starts only below the user-defined passive pressure start depth.",
-        "Water pressure is added separately when total pressure is selected.",
+        "Passive effective soil pressure is calculated explicitly as p'p = sigma'v/Ka + 2c sqrt(1/Ka), beginning at the user-defined passive pressure start depth. The cohesion term is included only when the cohesion checkbox is selected.",
+        "Passive total pressure is calculated as passive effective soil pressure plus pore-water pressure when total pressure is selected.",
         "Surcharge pressure is calculated separately from earth pressure. FHWA/WALLPRES strip loading, NAVFAC/Boussinesq point loading, and AASHTO 2:1 strip/isolated footing/point-load distribution are included as separate surcharge methods when selected.",
     ]
     def add_safe_bullet(document, text):
@@ -1223,7 +1252,7 @@ with tab2:
     fig6.tight_layout(); st.pyplot(fig6); plt.close(fig6)
 
 with tab3:
-    st.markdown("""
+    st.markdown(r"""
 ### How this version handles layers and groundwater
 
 - The app computes vertical stress by integrating each soil layer from the surface to the selected depth.
@@ -1231,6 +1260,8 @@ with tab3:
 - Below the water table it uses saturated unit weight, γsat, computes pore pressure, then uses effective vertical stress for soil pressure.
 - Total lateral pressure = effective lateral soil pressure + water pressure.
 - Passive pressure can start at any selected depth from the wall top; pressure above that depth is set to zero.
+- Passive effective soil pressure is calculated as $p'_p = \\sigma'_{v,p}/K_a + 2c\\sqrt{1/K_a}$ when cohesion is enabled. For $c=0$, this is exactly $\\sigma'_{v,p}/K_a$.
+- Passive total pressure is the passive effective soil pressure plus passive-side pore-water pressure when total pressure is selected.
 - Surcharge pressure is calculated separately and is not mixed into the basic earth-pressure resultants.
 - For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
 - For AASHTO surcharge, the app sets surcharge pressure to zero above z2 and calculates it only below z2. Below z2, z2 = 2d - bf and D1 = (bf + z)/2 + d. For strip footing, Δσv = Pv / D1. For isolated rectangular footing, Δσv = P'v / [D1(L+z)]. For point load, bf = 0 and Δσv = P'v / D1². It calculates Δσv separately and then applies Δp = K × Δσv.
@@ -1257,6 +1288,14 @@ with tab3:
 Rankine active pressure, effective-stress form:
 
 $$p'_a = K_a \sigma'_v - 2c\sqrt{K_a}$$
+
+Rankine passive pressure, effective-stress form:
+
+$$p'_p = \frac{\sigma'_{v,p}}{K_a} + 2c\sqrt{\frac{1}{K_a}}$$
+
+For cohesionless soil:
+
+$$p'_p = \frac{\sigma'_{v,p}}{K_a}$$
 
 Total pressure below groundwater:
 
@@ -1289,6 +1328,8 @@ with tab4:
         "Rankine active + surcharge (psf)": np.round(pa_rankine_plus_surcharge[idx], 1),
         "Coulomb active + surcharge (psf)": np.round(pa_coulomb_plus_surcharge[idx], 1),
         "At-rest + surcharge (psf)": np.round(pa_atrest_plus_surcharge[idx], 1),
+        "Rankine passive effective (psf)": np.round(pp_rankine_eff[idx], 1),
+        "Coulomb passive effective (psf)": np.round(pp_coulomb_eff[idx], 1),
         "Rankine passive total (psf)": np.round(pp_rankine[idx], 1),
         "Coulomb passive total (psf)": np.round(pp_coulomb[idx], 1),
         "Rankine net pressure (psf)": np.round(net_pressure_rankine[idx], 1),
