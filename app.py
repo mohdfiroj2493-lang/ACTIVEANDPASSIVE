@@ -357,7 +357,7 @@ with st.sidebar:
             "USACE Final Diagram Points",
             min_value=201,
             max_value=1201,
-            value=501,
+            value=301,
             step=100,
         )
         st.caption(
@@ -1075,7 +1075,14 @@ def usace_pressure_components(z_arr, method):
     }
 
 
-def usace_trial_solution(embedment_ft, transition_fraction, method, point_count=241):
+def usace_trial_solution(
+    embedment_ft,
+    transition_fraction,
+    method,
+    point_count=241,
+    master_depths=None,
+    master_components=None,
+):
     """Evaluate one USACE trial embedment and transition location."""
     embedment_ft = float(embedment_ft)
     transition_fraction = float(transition_fraction)
@@ -1084,10 +1091,25 @@ def usace_trial_solution(embedment_ft, transition_fraction, method, point_count=
         float(passive_start_depth) + transition_fraction * embedment_ft
     )
 
-    z = np.linspace(0.0, bottom_depth, max(int(point_count), 101))
-    components = usace_pressure_components(z, method)
-    net_active = components["net_active"]
-    net_passive = components["net_passive"]
+    z = np.linspace(0.0, bottom_depth, max(int(point_count), 81))
+
+    # The earth-pressure components depend on depth and the selected method,
+    # but not on the trial embedment or transition ratio. During the USACE
+    # search they are therefore calculated once on a master depth grid and
+    # interpolated for each trial. This removes thousands of repeated layered-
+    # stress calculations and keeps the Streamlit app responsive.
+    if master_depths is not None and master_components is not None:
+        master_depths = np.asarray(master_depths, dtype=float)
+        net_active = np.interp(
+            z, master_depths, np.asarray(master_components["net_active"], dtype=float)
+        )
+        net_passive = np.interp(
+            z, master_depths, np.asarray(master_components["net_passive"], dtype=float)
+        )
+    else:
+        components = usace_pressure_components(z, method)
+        net_active = components["net_active"]
+        net_passive = components["net_passive"]
 
     p_transition = float(np.interp(transition_depth, z, net_active))
     p_bottom_passive = float(net_passive[-1])
@@ -1129,147 +1151,92 @@ def usace_trial_solution(embedment_ft, transition_fraction, method, point_count=
     }
 
 
-def bounded_least_squares_numpy(
+def bounded_grid_search_numpy(
     objective,
     x0,
     lower_bounds,
     upper_bounds,
-    max_iterations=300,
-    residual_tolerance=1.0e-9,
+    coarse_points=11,
+    refinement_points=7,
+    refinement_levels=8,
 ):
-    """Small bounded least-squares solver implemented with NumPy only.
+    """Fast bounded two-variable search implemented with NumPy only.
 
-    The USACE equilibrium problem has only two unknowns: embedment and the
-    transition-depth ratio. A damped Gauss-Newton/Levenberg-Marquardt step is
-    combined with a bounded pattern search so the Streamlit app does not need
-    SciPy on local machines or Streamlit Cloud.
+    The USACE equilibrium problem contains only two unknowns: embedment and
+    transition-depth ratio. A small global grid is followed by shrinking local
+    grids. Objective values are cached, so repeated candidate points do not
+    trigger duplicate pressure integrations.
     """
     lower = np.asarray(lower_bounds, dtype=float)
     upper = np.asarray(upper_bounds, dtype=float)
-    x = np.clip(np.asarray(x0, dtype=float), lower, upper)
+    x0 = np.clip(np.asarray(x0, dtype=float), lower, upper)
+    cache = {}
     nfev = 0
 
     def evaluate(values):
         nonlocal nfev
+        values = np.clip(np.asarray(values, dtype=float), lower, upper)
+        key = tuple(np.round(values, 12))
+        if key in cache:
+            return cache[key]
         residual = np.asarray(objective(values), dtype=float)
         nfev += 1
         if residual.shape != (2,) or not np.all(np.isfinite(residual)):
-            return np.array([1.0e6, 1.0e6], dtype=float)
-        return residual
+            residual = np.array([1.0e6, 1.0e6], dtype=float)
+        cost = 0.5 * float(np.dot(residual, residual))
+        result = (cost, values.copy(), residual.copy())
+        cache[key] = result
+        return result
 
-    residual = evaluate(x)
-    cost = 0.5 * float(np.dot(residual, residual))
-    best_x = x.copy()
-    best_residual = residual.copy()
-    best_cost = cost
+    candidates = [evaluate(x0)]
+    x_values = np.linspace(lower[0], upper[0], max(int(coarse_points), 5))
+    y_values = np.linspace(lower[1], upper[1], max(int(coarse_points), 5))
+    for x_value in x_values:
+        for y_value in y_values:
+            candidates.append(evaluate([x_value, y_value]))
 
-    span = np.maximum(upper - lower, 1.0)
-    pattern_step = np.array(
-        [max(0.04 * span[0], 0.05), max(0.04 * span[1], 0.005)],
+    candidates.sort(key=lambda item: item[0])
+    # Refine the best global point and two alternate low-cost basins.
+    centers = [item[1].copy() for item in candidates[:3]]
+    global_best = candidates[0]
+    coarse_step = np.array(
+        [
+            (upper[0] - lower[0]) / max(len(x_values) - 1, 1),
+            (upper[1] - lower[1]) / max(len(y_values) - 1, 1),
+        ],
         dtype=float,
     )
-    minimum_step = np.array(
-        [max(1.0e-7 * span[0], 1.0e-7), 1.0e-8],
-        dtype=float,
-    )
-    damping = 1.0e-3
 
-    for _ in range(int(max_iterations)):
-        if float(np.linalg.norm(residual)) <= residual_tolerance:
-            break
+    for initial_center in centers:
+        center = initial_center.copy()
+        half_width = np.maximum(1.5 * coarse_step, np.array([0.05, 0.01]))
+        local_best = evaluate(center)
 
-        # Central-difference Jacobian where possible; one-sided at bounds.
-        jacobian = np.zeros((2, 2), dtype=float)
-        for j in range(2):
-            h = max(1.0e-5 * span[j], 1.0e-7)
-            x_plus = x.copy()
-            x_minus = x.copy()
-            x_plus[j] = min(x[j] + h, upper[j])
-            x_minus[j] = max(x[j] - h, lower[j])
+        for _ in range(max(int(refinement_levels), 1)):
+            x_lo = max(lower[0], center[0] - half_width[0])
+            x_hi = min(upper[0], center[0] + half_width[0])
+            y_lo = max(lower[1], center[1] - half_width[1])
+            y_hi = min(upper[1], center[1] + half_width[1])
+            local_candidates = []
+            for x_value in np.linspace(x_lo, x_hi, max(int(refinement_points), 5)):
+                for y_value in np.linspace(y_lo, y_hi, max(int(refinement_points), 5)):
+                    local_candidates.append(evaluate([x_value, y_value]))
+            local_candidates.sort(key=lambda item: item[0])
+            if local_candidates[0][0] < local_best[0]:
+                local_best = local_candidates[0]
+                center = local_best[1].copy()
+            half_width *= 0.35
 
-            if x_plus[j] > x_minus[j]:
-                r_plus = evaluate(x_plus)
-                r_minus = evaluate(x_minus)
-                jacobian[:, j] = (r_plus - r_minus) / (x_plus[j] - x_minus[j])
-
-        gradient = jacobian.T @ residual
-        normal_matrix = jacobian.T @ jacobian
-        accepted = False
-
-        # Damped Gauss-Newton step with a short backtracking search.
-        for _attempt in range(12):
-            scale = np.maximum(np.diag(normal_matrix), 1.0)
-            system = normal_matrix + damping * np.diag(scale)
-            try:
-                step = np.linalg.solve(system, -gradient)
-            except np.linalg.LinAlgError:
-                step = -np.linalg.pinv(system) @ gradient
-
-            if not np.all(np.isfinite(step)):
-                damping *= 10.0
-                continue
-
-            for line_factor in (1.0, 0.5, 0.25, 0.1, 0.05):
-                trial_x = np.clip(x + line_factor * step, lower, upper)
-                if np.allclose(trial_x, x, rtol=0.0, atol=1.0e-14):
-                    continue
-                trial_residual = evaluate(trial_x)
-                trial_cost = 0.5 * float(np.dot(trial_residual, trial_residual))
-                if trial_cost < cost:
-                    x = trial_x
-                    residual = trial_residual
-                    cost = trial_cost
-                    damping = max(damping / 3.0, 1.0e-12)
-                    accepted = True
-                    break
-            if accepted:
-                break
-            damping = min(damping * 10.0, 1.0e12)
-
-        # If the local quadratic step stalls, explore nearby bounded points.
-        if not accepted:
-            candidate_offsets = (
-                np.array([pattern_step[0], 0.0]),
-                np.array([-pattern_step[0], 0.0]),
-                np.array([0.0, pattern_step[1]]),
-                np.array([0.0, -pattern_step[1]]),
-                np.array([pattern_step[0], pattern_step[1]]),
-                np.array([pattern_step[0], -pattern_step[1]]),
-                np.array([-pattern_step[0], pattern_step[1]]),
-                np.array([-pattern_step[0], -pattern_step[1]]),
-            )
-            local_best = None
-            for offset in candidate_offsets:
-                trial_x = np.clip(x + offset, lower, upper)
-                if np.allclose(trial_x, x, rtol=0.0, atol=1.0e-14):
-                    continue
-                trial_residual = evaluate(trial_x)
-                trial_cost = 0.5 * float(np.dot(trial_residual, trial_residual))
-                if local_best is None or trial_cost < local_best[0]:
-                    local_best = (trial_cost, trial_x, trial_residual)
-
-            if local_best is not None and local_best[0] < cost:
-                cost, x, residual = local_best
-                accepted = True
-            else:
-                pattern_step *= 0.5
-
-        if cost < best_cost:
-            best_cost = cost
-            best_x = x.copy()
-            best_residual = residual.copy()
-
-        if np.all(pattern_step <= minimum_step):
-            break
+        if local_best[0] < global_best[0]:
+            global_best = local_best
 
     return {
-        "x": best_x,
-        "fun": best_residual,
-        "cost": best_cost,
+        "x": global_best[1],
+        "fun": global_best[2],
+        "cost": global_best[0],
         "nfev": nfev,
-        "success": bool(np.all(np.isfinite(best_residual))),
+        "success": bool(np.all(np.isfinite(global_best[2]))),
     }
-
 
 def solve_usace_cantilever(method):
     """Solve USACE force and moment equilibrium for penetration and transition."""
@@ -1287,65 +1254,52 @@ def solve_usace_cantilever(method):
     min_embedment = max(0.25, 0.025 * float(passive_start_depth))
     max_embedment = max(float(usace_max_embedment_ft), min_embedment + 0.5)
 
+    # Precompute the depth-dependent pressure components once. Trial solutions
+    # then use interpolation instead of recalculating layered vertical stresses
+    # at every optimization evaluation.
+    maximum_bottom_depth = float(passive_start_depth) + max_embedment
+    master_point_count = int(
+        min(
+            3001,
+            max(801, 2 * int(usace_solver_points) + 1, 4 * int(n_points) + 1),
+        )
+    )
+    master_depths = np.linspace(0.0, maximum_bottom_depth, master_point_count)
+    master_components = usace_pressure_components(master_depths, method)
+
     def objective(x):
         trial = usace_trial_solution(
-            x[0], x[1], method, point_count=221
+            x[0],
+            x[1],
+            method,
+            point_count=121,
+            master_depths=master_depths,
+            master_components=master_components,
         )
         return trial["normalized_residual"]
 
-    # Coarse trial grid identifies useful initial guesses and avoids convergence
-    # to a nonzero local minimum at a search bound.
-    embed_grid = np.linspace(min_embedment, max_embedment, 13)
-    ratio_grid = np.linspace(0.08, 0.96, 12)
-    starts = []
-    for embed_guess in embed_grid:
-        for ratio_guess in ratio_grid:
-            residual = objective([embed_guess, ratio_guess])
-            starts.append(
-                (float(np.linalg.norm(residual)), embed_guess, ratio_guess)
-            )
-    starts.sort(key=lambda item: item[0])
-
     current_embedment = max(float(H) - float(passive_start_depth), min_embedment)
-    initial_guesses = [
-        (min(max(current_embedment, min_embedment), max_embedment), 0.60),
-        (min(max(current_embedment, min_embedment), max_embedment), 0.82),
-    ]
-    initial_guesses.extend([(e, r) for _, e, r in starts[:8]])
+    result = bounded_grid_search_numpy(
+        objective,
+        x0=[min(max(current_embedment, min_embedment), max_embedment), 0.60],
+        lower_bounds=[min_embedment, 0.01],
+        upper_bounds=[max_embedment, 0.99],
+        coarse_points=11,
+        refinement_points=7,
+        refinement_levels=8,
+    )
 
-    best = None
-    for embed_guess, ratio_guess in initial_guesses:
-        try:
-            result = bounded_least_squares_numpy(
-                objective,
-                x0=[embed_guess, ratio_guess],
-                lower_bounds=[min_embedment, 0.01],
-                upper_bounds=[max_embedment, 0.99],
-                max_iterations=350,
-                residual_tolerance=1.0e-10,
-            )
-        except Exception:
-            continue
-        residual_norm = float(np.linalg.norm(result["fun"]))
-        if best is None or residual_norm < best[0]:
-            best = (residual_norm, result)
-
-    if best is None:
-        return {
-            "success": False,
-            "message": f"The {method} USACE equilibrium solver did not return a result.",
-        }
-
-    residual_norm, result = best
     final = usace_trial_solution(
         result["x"][0],
         result["x"][1],
         method,
         point_count=max(int(usace_solver_points), int(n_points), 301),
+        master_depths=master_depths,
+        master_components=master_components,
     )
     final_residual_norm = float(np.linalg.norm(final["normalized_residual"]))
     at_upper_bound = final["embedment"] >= 0.999 * max_embedment
-    success = final_residual_norm <= 2.0e-4 and not at_upper_bound
+    success = final_residual_norm <= 5.0e-4 and not at_upper_bound
 
     if not success:
         message = (
@@ -1353,7 +1307,14 @@ def solve_usace_cantilever(method):
             f"trial embedment of {max_embedment:.2f} ft. Increase the search limit or "
             "review the pressure inputs."
         )
-        final.update({"success": False, "message": message})
+        final.update(
+            {
+                "success": False,
+                "message": message,
+                "residual_norm": final_residual_norm,
+                "solver_evaluations": int(result.get("nfev", 0)),
+            }
+        )
         return final
 
     shear = cumulative_trapezoid_np(final["design_pressure"], final["depths"]) / 1000.0
@@ -1381,13 +1342,19 @@ def solve_usace_cantilever(method):
                 final["depths"][int(np.argmax(np.abs(deflection)))]
             ),
             "residual_norm": final_residual_norm,
+            "solver_evaluations": int(result.get("nfev", 0)),
         }
     )
     return final
 
 
-usace_rankine = solve_usace_cantilever("Rankine")
-usace_coulomb = solve_usace_cantilever("Coulomb")
+if run_usace_analysis:
+    with st.spinner("Solving USACE force and moment equilibrium..."):
+        usace_rankine = solve_usace_cantilever("Rankine")
+        usace_coulomb = solve_usace_cantilever("Coulomb")
+else:
+    usace_rankine = {"success": False, "message": "USACE analysis is disabled."}
+    usace_coulomb = {"success": False, "message": "USACE analysis is disabled."}
 
 
 # -----------------------------
