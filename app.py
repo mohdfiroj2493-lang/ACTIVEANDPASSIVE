@@ -1021,11 +1021,21 @@ def create_net_shear_moment_figure():
 
     for ax in axes:
         ax.grid(True, alpha=0.3, linestyle="--")
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=8, loc="upper right")
+
+        # Place the horizontal-axis ticks and labels at the top of each panel.
+        ax.xaxis.set_label_position("top")
+        ax.xaxis.tick_top()
+        ax.tick_params(axis="x", labeltop=True, labelbottom=False, top=True, bottom=False)
+        ax.xaxis.labelpad = 8
+
+        # Keep the panel title above the top axis label and tick values.
+        ax.title.set_position((0.5, 1.20))
+
     # Because the four panels share the y-axis, set the direction once only.
     # This guarantees 0 ft at the top and H at the bottom.
     axes[0].set_ylim(H, 0)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.93])
     return fig
 
 
