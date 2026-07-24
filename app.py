@@ -296,8 +296,8 @@ with st.sidebar:
             fixity_fraction = float(fixity_percent) / 100.0
             point_of_fixity_depth = float(passive_start_depth) + fixity_fraction * embedment_depth_ft
             deflection_boundary_label = (
-                f"Point of fixity at {point_of_fixity_depth:.2f} ft "
-                f"({fixity_percent:.1f}% of embedment)"
+                f"Virtual fixity at {point_of_fixity_depth:.2f} ft "
+                f"({fixity_percent:.1f}% of embedment; restrained below)"
             )
             st.caption(
                 f"Embedment = {embedment_depth_ft:.2f} ft; calculated point of fixity = "
@@ -310,8 +310,10 @@ with st.sidebar:
             deflection_boundary_label = f"Pile toe fixed at {point_of_fixity_depth:.2f} ft"
 
         st.caption(
-            "Deflection is calculated by double integration of M/EI. The selected fixity point has zero rotation "
-            "and zero deflection. The imposed passive-pressure diagram is not iterated with wall movement."
+            "Deflection is calculated by double integration of M/EI above the selected virtual fixity. "
+            "The fixity point has zero rotation and zero deflection. For the Shoring Suite-style option, "
+            "the embedded segment below fixity is treated as restrained and is plotted at zero deflection. "
+            "The imposed passive-pressure diagram is not iterated with wall movement."
         )
 
         st.subheader("🏛️ USACE Cantilever Method")
@@ -819,12 +821,25 @@ moment_rankine = cumulative_trapezoid_np(shear_rankine, depths)
 moment_coulomb = cumulative_trapezoid_np(shear_coulomb, depths)
 
 
-def integrate_curvature_from_fixity(curvature, coordinate, fixed_coordinate):
-    """Integrate curvature in both directions from a zero-rotation, zero-deflection point.
+def integrate_curvature_from_fixity(
+    curvature,
+    coordinate,
+    fixed_coordinate,
+    restrain_below_fixity=True,
+):
+    """Integrate curvature upward from a virtual point of fixity.
 
-    The coordinate array must increase from the wall top toward the pile toe.
-    The fixed coordinate is inserted into the numerical grid when it does not
-    coincide with an existing calculation point.
+    The coordinate array increases from the wall top toward the pile toe. At
+    the selected point of fixity, rotation and deflection are both zero.
+
+    For the Shoring Suite-style virtual-fixity idealization, the embedded wall
+    below the fixity point is treated as restrained; rotation and deflection
+    are therefore reported as zero below that point. This avoids extending the
+    free-beam curvature integration into the restrained soil zone.
+
+    When ``restrain_below_fixity`` is False, curvature is also integrated from
+    the fixity point toward the pile toe. That option is retained for checking,
+    but it is not the default virtual-fixity representation.
     """
     curvature = np.asarray(curvature, dtype=float)
     coordinate = np.asarray(coordinate, dtype=float)
@@ -842,7 +857,7 @@ def integrate_curvature_from_fixity(curvature, coordinate, fixed_coordinate):
     rotation_aug = np.zeros_like(coordinate_aug, dtype=float)
     deflection_aug = np.zeros_like(coordinate_aug, dtype=float)
 
-    # Integrate upward from the fixity point toward the wall top.
+    # Integrate only the exposed/free portion upward from the virtual fixity.
     for i in range(fixed_index - 1, -1, -1):
         dx = coordinate_aug[i + 1] - coordinate_aug[i]
         rotation_aug[i] = rotation_aug[i + 1] - 0.5 * (
@@ -852,15 +867,17 @@ def integrate_curvature_from_fixity(curvature, coordinate, fixed_coordinate):
             rotation_aug[i + 1] + rotation_aug[i]
         ) * dx
 
-    # Integrate downward from the fixity point toward the pile toe.
-    for i in range(fixed_index, len(coordinate_aug) - 1):
-        dx = coordinate_aug[i + 1] - coordinate_aug[i]
-        rotation_aug[i + 1] = rotation_aug[i] + 0.5 * (
-            curvature_aug[i + 1] + curvature_aug[i]
-        ) * dx
-        deflection_aug[i + 1] = deflection_aug[i] + 0.5 * (
-            rotation_aug[i + 1] + rotation_aug[i]
-        ) * dx
+    if not restrain_below_fixity:
+        # Optional diagnostic continuation below the fixity point.
+        for i in range(fixed_index, len(coordinate_aug) - 1):
+            dx = coordinate_aug[i + 1] - coordinate_aug[i]
+            rotation_aug[i + 1] = rotation_aug[i] + 0.5 * (
+                curvature_aug[i + 1] + curvature_aug[i]
+            ) * dx
+            deflection_aug[i + 1] = deflection_aug[i] + 0.5 * (
+                rotation_aug[i + 1] + rotation_aug[i]
+            ) * dx
+    # Otherwise, the initialized zeros are retained below virtual fixity.
 
     rotation = np.interp(coordinate, coordinate_aug, rotation_aug)
     deflection = np.interp(coordinate, coordinate_aug, deflection_aug)
@@ -1985,7 +2002,7 @@ def generate_word_report(template_bytes=None, meta=None):
         "Passive effective soil pressure is calculated explicitly as p'p = sigma'v/Ka + 2c sqrt(1/Ka), beginning at the user-defined passive pressure start depth. The cohesion term is included only when the cohesion checkbox is selected.",
         "Passive total pressure is calculated as passive effective soil pressure plus pore-water pressure when total pressure is selected.",
         "Surcharge pressure is calculated separately from earth pressure. FHWA/WALLPRES strip loading, NAVFAC/Boussinesq point loading, and AASHTO 2:1 strip/isolated footing/point-load distribution are included as separate surcharge methods when selected.",
-        "Elastic deflection is calculated from curvature M/EI. The moment per foot of wall is multiplied by the entered pile tributary width or spacing and converted to kip-in. Zero rotation and zero deflection are imposed at the selected point of fixity within the embedment, or at the pile toe when the toe-fixed option is selected. Positive deflection is in the active-pressure direction.",
+        "Elastic deflection is calculated from curvature M/EI. The moment per foot of wall is multiplied by the entered pile tributary width or spacing and converted to kip-in. Zero rotation and zero deflection are imposed at the selected virtual point of fixity. For the Shoring Suite-style option, the segment below virtual fixity is treated as restrained and its plotted rotation and deflection are set to zero. For the toe-fixed option, the same boundary is applied at the pile toe. Positive deflection is in the active-pressure direction.",
         "The optional USACE EM 1110-2-2504 cantilever method forms net-active and full-net-passive pressure distributions, reduces passive soil strengths by FSp, and solves simultaneous horizontal-force and moment equilibrium for the required penetration and transition point. The transition is used only as an idealized elastic fixity for the optional deflection diagram.",
     ]
     def add_safe_bullet(document, text):
@@ -2031,7 +2048,7 @@ def generate_word_report(template_bytes=None, meta=None):
 
     doc.add_heading("Limitations", level=2)
     doc.add_paragraph(
-        "The results are based on classical earth pressure methods and the input parameters entered by the user. The deflection calculation assumes a linear-elastic Euler-Bernoulli wall with an idealized point of fixity. The USACE transition point is a rotational-stability construct near the zero-displacement point; using it as both zero rotation and zero deflection is an additional approximation for plotting elastic deflection. The USACE solver extends the last entered soil layer below the entered wall bottom when evaluating trial penetrations. This calculation does not iterate soil pressure with wall movement, include discrete braces or anchors, model nonlinear pile-soil springs, or account for cracking, yielding, shear deformation, construction staging, or second-order effects. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
+        "The results are based on classical earth pressure methods and the input parameters entered by the user. The deflection calculation assumes a linear-elastic Euler-Bernoulli wall above an idealized virtual point of fixity; the wall below that point is treated as restrained for the Shoring Suite-style deflection plot. The USACE transition point is a rotational-stability construct near the zero-displacement point; using it as both zero rotation and zero deflection is an additional approximation for plotting elastic deflection. The USACE solver extends the last entered soil layer below the entered wall bottom when evaluating trial penetrations. This calculation does not iterate soil pressure with wall movement, include discrete braces or anchors, model nonlinear pile-soil springs, or account for cracking, yielding, shear deformation, construction staging, or second-order effects. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
     )
 
     out = BytesIO()
@@ -2164,7 +2181,7 @@ with tab2:
     plt.close(fig_sm)
     st.caption(
         "Net pressure = active pressure + surcharge pressure - passive pressure. Shear is integrated from the free top downward, "
-        "moment is the integral of shear, and deflection is obtained by double integration of M/EI about the selected fixity point. "
+        "moment is the integral of shear, and deflection is obtained by double integration of M/EI above the selected virtual fixity point. "
         "Pressure, shear, and moment are reported per foot of wall; pile deflection uses the entered tributary width/spacing. "
         f"The deflection boundary condition is: {deflection_boundary_label}. Positive deflection is in the active-pressure direction; "
         "negative deflection is toward the passive side."
@@ -2223,7 +2240,7 @@ with tab3:
 - For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
 - For AASHTO surcharge, the app sets surcharge pressure to zero above z2 and calculates it only below z2. Below z2, z2 = 2d - bf and D1 = (bf + z)/2 + d. For strip footing, Δσv = Pv / D1. For isolated rectangular footing, Δσv = P'v / [D1(L+z)]. For point load, bf = 0 and Δσv = P'v / D1². It calculates Δσv separately and then applies Δp = K × Δσv.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
-- Deflection uses zero rotation and zero displacement at the selected point of fixity. In the Shoring Suite-style option, that point is entered as a percentage of embedment below the excavation/passive-pressure start depth; the default is 60%.
+- Deflection uses zero rotation and zero displacement at the selected virtual point of fixity. Curvature is integrated only above that point; the embedded segment below it is treated as restrained and plotted at zero deflection. In the Shoring Suite-style option, the fixity point is entered as a percentage of embedment below the excavation/passive-pressure start depth; the default is 60%.
 
 ### English-unit conventions
 
@@ -2273,7 +2290,7 @@ Elastic beam curvature and deflection:
 
 $$\kappa = \frac{M}{EI}, \qquad \theta = \int \kappa\,dx, \qquad y = \int \theta\,dx$$
 
-For the point-of-fixity option, the boundary conditions are $\theta(z_f)=0$ and $y(z_f)=0$, where $z_f$ is measured from the wall top. The point is selected as a user-entered fraction of the embedment below the excavation/passive-pressure start depth. For the toe-fixed option, $z_f=H$. The moment used for one pile is the moment per foot of wall multiplied by the entered pile tributary width or spacing. Positive deflection is in the active-pressure direction; negative deflection is toward the passive side.
+For the point-of-fixity option, the boundary conditions are $\theta(z_f)=0$ and $y(z_f)=0$, where $z_f$ is measured from the wall top. Curvature is integrated upward from $z_f$ to the wall top. The embedded segment below $z_f$ is treated as restrained, so its plotted rotation and deflection are zero. The point is selected as a user-entered fraction of the embedment below the excavation/passive-pressure start depth. For the toe-fixed option, $z_f=H$. The moment used for one pile is the moment per foot of wall multiplied by the entered pile tributary width or spacing. Positive deflection is in the active-pressure direction; negative deflection is toward the passive side.
 
 ### USACE cantilever-wall equilibrium method
 
