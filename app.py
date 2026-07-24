@@ -1478,7 +1478,7 @@ def create_geometry_figure():
         c_i = float(row["Cohesion c (psf)"])
         label_suffix = " (extended)" if extended else ""
         ax.text(
-            x_right * 0.72,
+            x_right * 0.60,  # Shift soil-property labels left for easier reading.
             mid,
             f"Layer {i + 1}{label_suffix}\nγm={gamma_m:.0f} pcf, γsat={gamma_sat:.0f} pcf\nφ={phi_i:.0f}°, c={c_i:.0f} psf",
             fontsize=8,
