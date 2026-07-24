@@ -262,9 +262,53 @@ with st.sidebar:
         format="%.2f",
         help="Converts wall pressure in psf to the line load carried by one pile. Use pile spacing for a discrete pile wall; use 1.0 ft for a one-foot wall strip.",
     )
+
+    deflection_fixity_mode = st.selectbox(
+        "Deflection Boundary Condition",
+        [
+            "Point of fixity within embedment (Shoring Suite style)",
+            "Fixed at pile toe",
+        ],
+        index=0,
+        help=(
+            "The point-of-fixity option imposes zero rotation and zero deflection at a selected point within "
+            "the embedded length. The toe-fixed option imposes those conditions at the pile toe."
+        ),
+    )
+
+    embedment_depth_ft = max(float(H) - float(passive_start_depth), 0.0)
+    if deflection_fixity_mode.startswith("Point of fixity"):
+        fixity_percent = st.number_input(
+            "Point of Fixity below Excavation (% of Embedment)",
+            min_value=0.0,
+            max_value=100.0,
+            value=60.0,
+            step=1.0,
+            format="%.1f",
+            help=(
+                "Measured downward from the passive-pressure start/excavation depth. "
+                "A value between about 50% and 67% is commonly used for comparison with Shoring Suite."
+            ),
+        )
+        fixity_fraction = float(fixity_percent) / 100.0
+        point_of_fixity_depth = float(passive_start_depth) + fixity_fraction * embedment_depth_ft
+        deflection_boundary_label = (
+            f"Point of fixity at {point_of_fixity_depth:.2f} ft "
+            f"({fixity_percent:.1f}% of embedment)"
+        )
+        st.caption(
+            f"Embedment = {embedment_depth_ft:.2f} ft; calculated point of fixity = "
+            f"{point_of_fixity_depth:.2f} ft below the wall top."
+        )
+    else:
+        fixity_percent = 100.0
+        fixity_fraction = 1.0
+        point_of_fixity_depth = float(H)
+        deflection_boundary_label = f"Pile toe fixed at {point_of_fixity_depth:.2f} ft"
+
     st.caption(
-        "Deflection is calculated by integrating M/EI for an elastic cantilever fixed at the wall base and free at the top. "
-        "The imposed passive-pressure diagram is not iterated with movement."
+        "Deflection is calculated by double integration of M/EI. The selected fixity point has zero rotation "
+        "and zero deflection. The imposed passive-pressure diagram is not iterated with wall movement."
     )
 
     st.subheader("📊 Display Options")
@@ -667,8 +711,56 @@ moment_rankine = cumulative_trapezoid_np(shear_rankine, depths)
 moment_coulomb = cumulative_trapezoid_np(shear_coulomb, depths)
 
 
+def integrate_curvature_from_fixity(curvature, coordinate, fixed_coordinate):
+    """Integrate curvature in both directions from a zero-rotation, zero-deflection point.
+
+    The coordinate array must increase from the wall top toward the pile toe.
+    The fixed coordinate is inserted into the numerical grid when it does not
+    coincide with an existing calculation point.
+    """
+    curvature = np.asarray(curvature, dtype=float)
+    coordinate = np.asarray(coordinate, dtype=float)
+    fixed_coordinate = float(np.clip(fixed_coordinate, coordinate[0], coordinate[-1]))
+
+    close = np.isclose(coordinate, fixed_coordinate, rtol=0.0, atol=1.0e-9)
+    if np.any(close):
+        coordinate_aug = coordinate.copy()
+        fixed_index = int(np.flatnonzero(close)[0])
+    else:
+        coordinate_aug = np.sort(np.append(coordinate, fixed_coordinate))
+        fixed_index = int(np.argmin(np.abs(coordinate_aug - fixed_coordinate)))
+
+    curvature_aug = np.interp(coordinate_aug, coordinate, curvature)
+    rotation_aug = np.zeros_like(coordinate_aug, dtype=float)
+    deflection_aug = np.zeros_like(coordinate_aug, dtype=float)
+
+    # Integrate upward from the fixity point toward the wall top.
+    for i in range(fixed_index - 1, -1, -1):
+        dx = coordinate_aug[i + 1] - coordinate_aug[i]
+        rotation_aug[i] = rotation_aug[i + 1] - 0.5 * (
+            curvature_aug[i + 1] + curvature_aug[i]
+        ) * dx
+        deflection_aug[i] = deflection_aug[i + 1] - 0.5 * (
+            rotation_aug[i + 1] + rotation_aug[i]
+        ) * dx
+
+    # Integrate downward from the fixity point toward the pile toe.
+    for i in range(fixed_index, len(coordinate_aug) - 1):
+        dx = coordinate_aug[i + 1] - coordinate_aug[i]
+        rotation_aug[i + 1] = rotation_aug[i] + 0.5 * (
+            curvature_aug[i + 1] + curvature_aug[i]
+        ) * dx
+        deflection_aug[i + 1] = deflection_aug[i] + 0.5 * (
+            rotation_aug[i + 1] + rotation_aug[i]
+        ) * dx
+
+    rotation = np.interp(coordinate, coordinate_aug, rotation_aug)
+    deflection = np.interp(coordinate, coordinate_aug, deflection_aug)
+    return rotation, deflection
+
+
 def calculate_cantilever_deflection(moment_kip_ft_per_ft):
-    """Return curvature, rotation, and deflection for a base-fixed elastic pile/wall.
+    """Return curvature, rotation, and deflection using the selected fixity point.
 
     The pressure calculation produces moment per foot of wall. Multiplying by
     pile_tributary_width_ft gives the bending moment carried by one pile or the
@@ -680,10 +772,11 @@ def calculate_cantilever_deflection(moment_kip_ft_per_ft):
     moment_kip_in = np.asarray(moment_kip_ft_per_ft, dtype=float) * float(pile_tributary_width_ft) * 12.0
     curvature_per_in = moment_kip_in / EI_kip_in2
 
-    # Fixed-base boundary conditions at z = H:
-    # rotation(H) = 0 and deflection(H) = 0.
-    rotation_rad = reverse_cumulative_trapezoid_np(curvature_per_in, depth_in)
-    deflection_in = reverse_cumulative_trapezoid_np(rotation_rad, depth_in)
+    rotation_rad, deflection_in = integrate_curvature_from_fixity(
+        curvature_per_in,
+        depth_in,
+        float(point_of_fixity_depth) * 12.0,
+    )
     return curvature_per_in, rotation_rad, deflection_in
 
 
@@ -1016,6 +1109,13 @@ def create_net_shear_moment_figure():
     axes[3].plot(deflection_rankine, depths, lw=2.2, label="Rankine")
     axes[3].plot(deflection_coulomb, depths, lw=2.2, ls="--", label="Coulomb")
     axes[3].axvline(0, color="#334155", lw=0.8)
+    axes[3].axhline(
+        point_of_fixity_depth,
+        color="#7c3aed",
+        lw=1.1,
+        ls="-.",
+        label=f"Fixity = {point_of_fixity_depth:.2f} ft",
+    )
     axes[3].set_xlabel("Deflection y (in)")
     axes[3].set_title("Elastic Deflection")
 
@@ -1081,6 +1181,7 @@ def summary_table_df():
         "Max abs moment (kip-ft/ft)": [f"{max_abs_moment_rankine:.2f}", f"{max_abs_moment_coulomb:.2f}", "--"],
         "Top deflection (in)": [f"{top_deflection_rankine:.3f}", f"{top_deflection_coulomb:.3f}", "--"],
         "Max abs deflection (in)": [f"{max_abs_deflection_rankine:.3f}", f"{max_abs_deflection_coulomb:.3f}", "--"],
+        "Point of fixity depth (ft)": [f"{point_of_fixity_depth:.2f}", f"{point_of_fixity_depth:.2f}", "--"],
     })
 
 
@@ -1140,8 +1241,8 @@ def generate_word_report(template_bytes=None, meta=None):
 
     doc.add_heading("Input Parameters", level=2)
     input_df = pd.DataFrame({
-        "Parameter": ["Wall height H", "Wall inclination alpha", "Backfill slope beta", "Wall friction delta", "Passive pressure start depth", "Water table", "Water unit weight", "Surcharge type", "Young's modulus E", "Moment of inertia I", "Pile tributary width / spacing"],
-        "Value": [f"{H:.2f} ft", f"{alpha_deg:.2f} deg", f"{beta_deg:.2f} deg", f"{delta_deg:.2f} deg", f"{passive_start_depth:.2f} ft", f"{water_table:.2f} ft" if include_water else "Not included", f"{gamma_w:.1f} pcf" if include_water else "N/A", surcharge_label, f"{youngs_modulus_ksi:.1f} ksi", f"{moment_of_inertia_in4:.2f} in^4", f"{pile_tributary_width_ft:.2f} ft"],
+        "Parameter": ["Wall height H", "Wall inclination alpha", "Backfill slope beta", "Wall friction delta", "Passive pressure start depth", "Water table", "Water unit weight", "Surcharge type", "Young's modulus E", "Moment of inertia I", "Pile tributary width / spacing", "Deflection boundary condition", "Embedment depth", "Point of fixity depth"],
+        "Value": [f"{H:.2f} ft", f"{alpha_deg:.2f} deg", f"{beta_deg:.2f} deg", f"{delta_deg:.2f} deg", f"{passive_start_depth:.2f} ft", f"{water_table:.2f} ft" if include_water else "Not included", f"{gamma_w:.1f} pcf" if include_water else "N/A", surcharge_label, f"{youngs_modulus_ksi:.1f} ksi", f"{moment_of_inertia_in4:.2f} in^4", f"{pile_tributary_width_ft:.2f} ft", deflection_boundary_label, f"{embedment_depth_ft:.2f} ft", f"{point_of_fixity_depth:.2f} ft"],
     })
     add_df_to_doc(doc, input_df)
 
@@ -1159,7 +1260,7 @@ def generate_word_report(template_bytes=None, meta=None):
         "Passive effective soil pressure is calculated explicitly as p'p = sigma'v/Ka + 2c sqrt(1/Ka), beginning at the user-defined passive pressure start depth. The cohesion term is included only when the cohesion checkbox is selected.",
         "Passive total pressure is calculated as passive effective soil pressure plus pore-water pressure when total pressure is selected.",
         "Surcharge pressure is calculated separately from earth pressure. FHWA/WALLPRES strip loading, NAVFAC/Boussinesq point loading, and AASHTO 2:1 strip/isolated footing/point-load distribution are included as separate surcharge methods when selected.",
-        "Elastic deflection is calculated from curvature M/EI. The moment per foot of wall is multiplied by the entered pile tributary width or spacing, converted to kip-in, and integrated from the fixed base using zero base rotation and zero base deflection. Positive deflection is in the active-pressure direction.",
+        "Elastic deflection is calculated from curvature M/EI. The moment per foot of wall is multiplied by the entered pile tributary width or spacing and converted to kip-in. Zero rotation and zero deflection are imposed at the selected point of fixity within the embedment, or at the pile toe when the toe-fixed option is selected. Positive deflection is in the active-pressure direction.",
     ]
     def add_safe_bullet(document, text):
         # Some company templates do not include Word's built-in "List Bullet" style.
@@ -1198,7 +1299,7 @@ def generate_word_report(template_bytes=None, meta=None):
 
     doc.add_heading("Limitations", level=2)
     doc.add_paragraph(
-        "The results are based on classical earth pressure methods and the input parameters entered by the user. The deflection calculation assumes a linear-elastic Euler-Bernoulli cantilever fixed at the wall base and does not iterate soil pressure with wall movement, include discrete braces or anchors, model nonlinear pile-soil springs, or account for cracking, yielding, shear deformation, construction staging, or second-order effects. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
+        "The results are based on classical earth pressure methods and the input parameters entered by the user. The deflection calculation assumes a linear-elastic Euler-Bernoulli wall with an idealized user-selected point of fixity. The exact fixity location used by proprietary software may differ because it can be determined from its internal passive-resistance procedure. This calculation does not iterate soil pressure with wall movement, include discrete braces or anchors, model nonlinear pile-soil springs, or account for cracking, yielding, shear deformation, construction staging, or second-order effects. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
     )
 
     out = BytesIO()
@@ -1266,8 +1367,9 @@ with tab1:
         <div class="result-card"><span class="method-badge coulomb">Coulomb</span><h4>Top y = {top_deflection_coulomb:.3f} in</h4><p style="margin:0;font-size:0.85rem;">Maximum |y| = <b>{max_abs_deflection_coulomb:.3f} in</b> at depth {max_deflection_depth_coulomb:.2f} ft</p></div>
         """, unsafe_allow_html=True)
         st.caption(
-            f"Base fixed; E = {youngs_modulus_ksi:,.1f} ksi, I = {moment_of_inertia_in4:,.2f} in⁴, "
-            f"tributary width/spacing = {pile_tributary_width_ft:.2f} ft."
+            f"{deflection_boundary_label}; E = {youngs_modulus_ksi:,.1f} ksi, "
+            f"I = {moment_of_inertia_in4:,.2f} in⁴, tributary width/spacing = "
+            f"{pile_tributary_width_ft:.2f} ft."
         )
 
     with col_diag:
@@ -1330,9 +1432,10 @@ with tab2:
     plt.close(fig_sm)
     st.caption(
         "Net pressure = active pressure + surcharge pressure - passive pressure. Shear is integrated from the free top downward, "
-        "moment is the integral of shear, and deflection is obtained by integrating M/EI from the fixed base. "
+        "moment is the integral of shear, and deflection is obtained by double integration of M/EI about the selected fixity point. "
         "Pressure, shear, and moment are reported per foot of wall; pile deflection uses the entered tributary width/spacing. "
-        "Positive deflection is in the active-pressure direction; negative deflection is toward the passive side."
+        f"The deflection boundary condition is: {deflection_boundary_label}. Positive deflection is in the active-pressure direction; "
+        "negative deflection is toward the passive side."
     )
 
     csm1, csm2 = st.columns(2)
@@ -1388,6 +1491,7 @@ with tab3:
 - For strip surcharge, the app follows the FHWA/WALLPRES-style rigid-wall equation: Δp = 2q/π × [β - sin(β)cos(2α)], where β = atan(x2/z) - atan(x1/z), α = atan(x1/z) + β/2, and x2 = x1 + strip width.
 - For AASHTO surcharge, the app sets surcharge pressure to zero above z2 and calculates it only below z2. Below z2, z2 = 2d - bf and D1 = (bf + z)/2 + d. For strip footing, Δσv = Pv / D1. For isolated rectangular footing, Δσv = P'v / [D1(L+z)]. For point load, bf = 0 and Δσv = P'v / D1². It calculates Δσv separately and then applies Δp = K × Δσv.
 - If cohesion creates negative active pressure, the active pressure is clipped to zero for the net diagram.
+- Deflection uses zero rotation and zero displacement at the selected point of fixity. In the Shoring Suite-style option, that point is entered as a percentage of embedment below the excavation/passive-pressure start depth; the default is 60%.
 
 ### English-unit conventions
 
@@ -1437,7 +1541,7 @@ Elastic beam curvature and deflection:
 
 $$\kappa = \frac{M}{EI}, \qquad \theta = \int \kappa\,dx, \qquad y = \int \theta\,dx$$
 
-The base boundary conditions are $\theta(H)=0$ and $y(H)=0$. The moment used for one pile is the moment per foot of wall multiplied by the entered pile tributary width or spacing. Positive deflection is in the active-pressure direction; negative deflection is toward the passive side.
+For the point-of-fixity option, the boundary conditions are $\theta(z_f)=0$ and $y(z_f)=0$, where $z_f$ is measured from the wall top. The point is selected as a user-entered fraction of the embedment below the excavation/passive-pressure start depth. For the toe-fixed option, $z_f=H$. The moment used for one pile is the moment per foot of wall multiplied by the entered pile tributary width or spacing. Positive deflection is in the active-pressure direction; negative deflection is toward the passive side.
 """)
 
 with tab4:
@@ -1493,6 +1597,7 @@ with tab4:
         "Top deflection (in)": [f"{top_deflection_rankine:.3f}", f"{top_deflection_coulomb:.3f}", "—"],
         "Max |deflection| (in)": [f"{max_abs_deflection_rankine:.3f}", f"{max_abs_deflection_coulomb:.3f}", "—"],
         "Depth of max |deflection| (ft)": [f"{max_deflection_depth_rankine:.2f}", f"{max_deflection_depth_coulomb:.2f}", "—"],
+        "Point of fixity depth (ft)": [f"{point_of_fixity_depth:.2f}", f"{point_of_fixity_depth:.2f}", "—"],
     })
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
