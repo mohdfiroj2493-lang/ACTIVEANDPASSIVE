@@ -932,11 +932,12 @@ def create_pressure_diagram_figure():
         ax.plot(-pa, depths, lw=2.0, label="Active / At-Rest")
         ax.plot(pp, depths, lw=2.0, ls="--", label="Passive")
         ax.axvline(0, lw=0.8)
-        ax.invert_yaxis()
         ax.set_title(title)
         ax.set_xlabel("Pressure (psf)")
         ax.grid(True, alpha=0.3, linestyle="--")
         ax.legend(fontsize=8)
+    # Shared depth axis: zero at wall top and depth increasing downward.
+    axes[0].set_ylim(H, 0)
     axes[0].set_ylabel("Depth (ft)")
     fig.suptitle("Lateral Earth Pressure Diagrams")
     fig.tight_layout()
@@ -950,7 +951,7 @@ def create_active_comparison_figure():
     ax.plot(pa_atrest, depths, lw=2.2, ls=":", label="At-Rest")
     if surcharge_type != "None":
         ax.plot(pa_rankine_plus_surcharge, depths, lw=1.8, ls="-.", label="Rankine + surcharge")
-    ax.invert_yaxis()
+    ax.set_ylim(H, 0)
     ax.set_xlabel("Pressure (psf)")
     ax.set_ylabel("Depth (ft)")
     ax.set_title("Active / At-Rest Pressure Comparison")
@@ -964,7 +965,7 @@ def create_passive_comparison_figure():
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.plot(pp_rankine, depths, lw=2.2, label="Rankine Passive")
     ax.plot(pp_coulomb, depths, lw=2.2, ls="--", label="Coulomb Passive")
-    ax.invert_yaxis()
+    ax.set_ylim(H, 0)
     ax.set_xlabel("Pressure (psf)")
     ax.set_ylabel("Depth (ft)")
     ax.set_title("Passive Pressure Comparison")
@@ -980,7 +981,7 @@ def create_surcharge_figure():
     if surcharge_type in ["Uniform", "AASHTO"]:
         ax.plot(sur_c, depths, lw=2.2, ls="--", label="Coulomb")
         ax.plot(sur_0, depths, lw=2.2, ls=":", label="At-Rest")
-    ax.invert_yaxis()
+    ax.set_ylim(H, 0)
     ax.set_xlabel("Surcharge Pressure (psf)")
     ax.set_ylabel("Depth (ft)")
     ax.set_title("Separate Surcharge Pressure")
@@ -991,8 +992,7 @@ def create_surcharge_figure():
 
 
 def create_net_shear_moment_figure():
-    """Original three-panel pressure, shear, and moment figure."""
-    fig, axes = plt.subplots(1, 3, figsize=(15, 6), sharey=True)
+    fig, axes = plt.subplots(1, 4, figsize=(19, 6), sharey=True)
 
     axes[0].plot(net_pressure_rankine, depths, lw=2.2, label="Rankine net")
     axes[0].plot(net_pressure_coulomb, depths, lw=2.2, ls="--", label="Coulomb net")
@@ -1013,26 +1013,18 @@ def create_net_shear_moment_figure():
     axes[2].set_xlabel("Moment M (kip-ft/ft)")
     axes[2].set_title("Moment Diagram")
 
+    axes[3].plot(deflection_rankine, depths, lw=2.2, label="Rankine")
+    axes[3].plot(deflection_coulomb, depths, lw=2.2, ls="--", label="Coulomb")
+    axes[3].axvline(0, color="#334155", lw=0.8)
+    axes[3].set_xlabel("Deflection y (in)")
+    axes[3].set_title("Elastic Deflection")
+
     for ax in axes:
-        ax.invert_yaxis()
         ax.grid(True, alpha=0.3, linestyle="--")
         ax.legend(fontsize=8)
-    fig.tight_layout()
-    return fig
-
-
-def create_deflection_figure():
-    """Separate elastic deflection figure so the original three-panel figure is unchanged."""
-    fig, ax = plt.subplots(figsize=(7, 6))
-    ax.plot(deflection_rankine, depths, lw=2.2, label="Rankine")
-    ax.plot(deflection_coulomb, depths, lw=2.2, ls="--", label="Coulomb")
-    ax.axvline(0, color="#334155", lw=0.8)
-    ax.invert_yaxis()
-    ax.set_xlabel("Deflection y (in)")
-    ax.set_ylabel("Depth from top (ft)")
-    ax.set_title("Elastic Wall/Pile Deflection")
-    ax.grid(True, alpha=0.3, linestyle="--")
-    ax.legend(fontsize=8)
+    # Because the four panels share the y-axis, set the direction once only.
+    # This guarantees 0 ft at the top and H at the bottom.
+    axes[0].set_ylim(H, 0)
     fig.tight_layout()
     return fig
 
@@ -1181,9 +1173,7 @@ def generate_word_report(template_bytes=None, meta=None):
     if surcharge_type != "None":
         figures.append((f"Figure {next_fig_num}: Separate surcharge pressure diagram.", create_surcharge_figure()))
         next_fig_num += 1
-    figures.append((f"Figure {next_fig_num}: Net pressure, shear, and moment diagrams along the pile/wall.", create_net_shear_moment_figure()))
-    next_fig_num += 1
-    figures.append((f"Figure {next_fig_num}: Elastic wall/pile deflection diagram.", create_deflection_figure()))
+    figures.append((f"Figure {next_fig_num}: Net pressure, shear, moment, and elastic deflection diagrams along the pile/wall.", create_net_shear_moment_figure()))
     for caption, fig in figures:
         doc.add_paragraph(caption)
         buf = fig_to_png_bytes(fig)
@@ -1291,12 +1281,13 @@ with tab1:
             if include_water:
                 ax.axhline(water_table, color="#0ea5e9", lw=1.2, ls=":", alpha=0.9)
             ax.axvline(0, color="#334155", lw=0.8)
-            ax.invert_yaxis()
             ax.set_title(title, fontweight="bold", fontsize=12, color="#1a3a5c")
             ax.set_xlabel("Pressure (psf)", fontsize=9)
             ax.legend(fontsize=8, loc="lower right")
             ax.grid(True, alpha=0.3, linestyle="--")
             ax.tick_params(labelsize=8)
+        # Shared depth axis: zero at top, depth increasing downward.
+        axes[0].set_ylim(H, 0)
         axes[0].set_ylabel("Depth (ft)", fontsize=10)
         fig.suptitle("Lateral Earth Pressure Diagrams", fontsize=13, fontweight="bold", color="#1a3a5c", y=1.01)
         plt.tight_layout()
@@ -1311,7 +1302,7 @@ with tab2:
         ax3.plot(pa_rankine, depths, lw=2.2, label="Rankine Active")
         ax3.plot(pa_coulomb, depths, lw=2.2, ls="--", label="Coulomb Active")
         ax3.plot(pa_atrest, depths, lw=2.2, ls=":", label="At-Rest")
-        ax3.invert_yaxis(); ax3.set_xlabel("Pressure (psf)"); ax3.set_ylabel("Depth (ft)")
+        ax3.set_ylim(H, 0); ax3.set_xlabel("Pressure (psf)"); ax3.set_ylabel("Depth (ft)")
         ax3.legend(); ax3.grid(True, alpha=0.3); ax3.set_title("Lateral Pressure Comparison")
         fig3.tight_layout(); st.pyplot(fig3); plt.close(fig3)
     with col2:
@@ -1319,44 +1310,29 @@ with tab2:
         fig4, ax4 = plt.subplots(figsize=(6, 6))
         ax4.plot(pp_rankine, depths, lw=2.2, label="Rankine Passive")
         ax4.plot(pp_coulomb, depths, lw=2.2, ls="--", label="Coulomb Passive")
-        ax4.invert_yaxis(); ax4.set_xlabel("Pressure (psf)"); ax4.set_ylabel("Depth (ft)")
+        ax4.set_ylim(H, 0); ax4.set_xlabel("Pressure (psf)"); ax4.set_ylabel("Depth (ft)")
         ax4.legend(); ax4.grid(True, alpha=0.3); ax4.set_title("Passive Pressure Comparison")
         fig4.tight_layout(); st.pyplot(fig4); plt.close(fig4)
 
-    st.subheader("Net Pressure, Shear, and Moment Along Pile/Wall")
+    st.subheader("Net Pressure, Shear, Moment, and Deflection Along Pile/Wall")
     fig_sm = create_net_shear_moment_figure()
     st.pyplot(fig_sm)
     plt.close(fig_sm)
     st.caption(
-        "Net pressure = active pressure + surcharge pressure - passive pressure. "
-        "Shear is integrated from the wall top downward, and moment is the integral of shear. "
-        "Pressure, shear, and moment are reported per foot of wall width."
+        "Net pressure = active pressure + surcharge pressure - passive pressure. Shear is integrated from the free top downward, "
+        "moment is the integral of shear, and deflection is obtained by integrating M/EI from the fixed base. "
+        "Pressure, shear, and moment are reported per foot of wall; pile deflection uses the entered tributary width/spacing. "
+        "Positive deflection is in the active-pressure direction; negative deflection is toward the passive side."
     )
 
     csm1, csm2 = st.columns(2)
     with csm1:
         st.metric("Max |V| - Rankine", f"{max_abs_shear_rankine:.2f} kips/ft")
         st.metric("Max |M| - Rankine", f"{max_abs_moment_rankine:.2f} kip-ft/ft")
+        st.metric("Max |y| - Rankine", f"{max_abs_deflection_rankine:.3f} in")
     with csm2:
         st.metric("Max |V| - Coulomb", f"{max_abs_shear_coulomb:.2f} kips/ft")
         st.metric("Max |M| - Coulomb", f"{max_abs_moment_coulomb:.2f} kip-ft/ft")
-
-    st.subheader("Elastic Wall/Pile Deflection")
-    fig_deflection = create_deflection_figure()
-    st.pyplot(fig_deflection)
-    plt.close(fig_deflection)
-    st.caption(
-        "Deflection is calculated by integrating M/EI from the fixed base. The moment per foot of wall is multiplied by the "
-        "entered pile tributary width/spacing. Positive deflection is toward the active-pressure side; negative deflection is "
-        "toward the passive side."
-    )
-
-    cdef1, cdef2 = st.columns(2)
-    with cdef1:
-        st.metric("Top y - Rankine", f"{top_deflection_rankine:.3f} in")
-        st.metric("Max |y| - Rankine", f"{max_abs_deflection_rankine:.3f} in")
-    with cdef2:
-        st.metric("Top y - Coulomb", f"{top_deflection_coulomb:.3f} in")
         st.metric("Max |y| - Coulomb", f"{max_abs_deflection_coulomb:.3f} in")
 
     if surcharge_type != "None":
@@ -1372,7 +1348,7 @@ with tab2:
             ax5.plot(sur_0, depths, lw=2.2, ls=":", label="At-Rest K × Δσv")
         else:
             ax5.plot(sur_r, depths, lw=2.2, label=surcharge_type)
-        ax5.invert_yaxis(); ax5.set_xlabel("Surcharge Pressure (psf)"); ax5.set_ylabel("Depth (ft)")
+        ax5.set_ylim(H, 0); ax5.set_xlabel("Surcharge Pressure (psf)"); ax5.set_ylabel("Depth (ft)")
         ax5.legend(); ax5.grid(True, alpha=0.3); ax5.set_title("Surcharge Pressure on Wall")
         fig5.tight_layout(); st.pyplot(fig5); plt.close(fig5)
 
