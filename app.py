@@ -43,278 +43,361 @@ def default_layers(n, height):
 # Sidebar inputs
 # -----------------------------
 with st.sidebar:
-    st.header("⚙️ Input Parameters")
+    with st.form("analysis_parameters_form", clear_on_submit=False):
+        st.header("⚙️ Input Parameters")
 
-    st.subheader("🧱 Wall Geometry")
-    H = st.number_input("Wall Height H (ft)", 3.0, 100.0, 20.0, 1.0)
-    alpha_deg = st.number_input("Wall Inclination α (°)", -20.0, 20.0, 0.0, 1.0,
-                                help="Angle of wall face from vertical (+ = leaning into backfill)")
-    beta_deg = st.number_input("Backfill Slope β (°)", 0.0, 30.0, 0.0, 1.0)
-    delta_deg = st.number_input("Wall Friction δ (°), for Coulomb", 0.0, 35.0, 15.0, 1.0)
+        st.subheader("🧱 Wall Geometry")
+        H = st.number_input("Wall Height H (ft)", 3.0, 100.0, 20.0, 1.0)
+        alpha_deg = st.number_input("Wall Inclination α (°)", -20.0, 20.0, 0.0, 1.0,
+                                    help="Angle of wall face from vertical (+ = leaning into backfill)")
+        beta_deg = st.number_input("Backfill Slope β (°)", 0.0, 30.0, 0.0, 1.0)
+        delta_deg = st.number_input("Wall Friction δ (°), for Coulomb", 0.0, 35.0, 15.0, 1.0)
 
-    st.subheader("🟫 Passive Pressure Zone")
-    passive_start_depth = st.number_input(
-        "Passive Pressure Start Depth from Top (ft)",
-        min_value=0.0,
-        max_value=float(H),
-        value=0.0,
-        step=0.5,
-        format="%.2f",
-        help="Passive resistance is set to zero above this depth. Below this depth, passive pressure is calculated using depth measured from this point."
-    )
-
-    st.subheader("💧 Groundwater")
-    include_water = st.checkbox("Include water table", True)
-    water_table = st.number_input("Water Table Depth from Top (ft)", 0.0, float(H), min(10.0, float(H)), 0.5)
-    gamma_w = st.number_input("Unit Weight of Water γw (pcf)", 60.0, 64.0, 62.4, 0.1)
-
-    st.subheader("🪨 Soil Properties / Layers")
-    st.caption("Use Add Layer to create more layers. Enter each layer bottom depth from the top; each layer thickness can be any value greater than 0 ft.")
-
-    if "soil_layers" not in st.session_state:
-        st.session_state.soil_layers = default_layers(1, float(H)).to_dict("records")
-
-    if st.button("➕ Add Layer", use_container_width=True):
-        layers = st.session_state.soil_layers
-        if len(layers) < 8:
-            if layers:
-                previous_top = 0.0 if len(layers) == 1 else float(layers[-2]["Bottom Depth (ft)"])
-                split_depth = round((previous_top + float(H)) / 2.0, 2)
-                layers[-1]["Bottom Depth (ft)"] = max(previous_top + 0.1, min(split_depth, float(H) - 0.1))
-                template = layers[-1].copy()
-                template["Bottom Depth (ft)"] = float(H)
-            else:
-                template = default_layers(1, float(H)).iloc[0].to_dict()
-            layers.append(template)
-            st.session_state.soil_layers = layers
-        else:
-            st.warning("Maximum 8 layers allowed.")
-
-    if len(st.session_state.soil_layers) > 1:
-        if st.button("➖ Remove Last Layer", use_container_width=True):
-            st.session_state.soil_layers = st.session_state.soil_layers[:-1]
-            st.session_state.soil_layers[-1]["Bottom Depth (ft)"] = float(H)
-
-    updated_layers = []
-    previous_bottom = 0.0
-    for i, layer in enumerate(st.session_state.soil_layers):
-        with st.container(border=True):
-            st.markdown(f"**Layer {i + 1}**")
-            # Bottom depth is an editable layer boundary.
-            # Each layer only needs a thickness greater than zero; the last
-            # layer is no longer locked to the wall height. If the final
-            # boundary is above the wall base, the calculation extends the
-            # last entered layer properties down to H.
-            bottom_min = min(float(H), previous_bottom + 0.01)
-            bottom_max = float(H)
-            bottom_default = float(layer.get("Bottom Depth (ft)", bottom_max))
-            bottom_default = min(max(bottom_default, bottom_min), bottom_max)
-
-            bottom_value = st.number_input(
-                "Bottom Depth from Top (ft)",
-                min_value=bottom_min,
-                max_value=bottom_max,
-                value=bottom_default,
-                step=0.1,
-                format="%.2f",
-                key=f"layer_{i}_bottom",
-                help="Enter the bottom depth of this layer. Layer thickness must be greater than 0 ft."
-            )
-
-            gamma_m_value = st.number_input(
-                "Moist Unit Weight γm (pcf)",
-                min_value=50.0,
-                max_value=160.0,
-                value=float(layer.get("Moist Unit Weight γm (pcf)", 120.0)),
-                step=1.0,
-                key=f"layer_{i}_gamma_m",
-            )
-            gamma_sat_value = st.number_input(
-                "Saturated Unit Weight γsat (pcf)",
-                min_value=50.0,
-                max_value=170.0,
-                value=float(layer.get("Saturated Unit Weight γsat (pcf)", 125.0)),
-                step=1.0,
-                key=f"layer_{i}_gamma_sat",
-            )
-            phi_value = st.number_input(
-                "Friction Angle φ (deg)",
-                min_value=0.0,
-                max_value=50.0,
-                value=float(layer.get("Friction Angle φ (deg)", 30.0)),
-                step=1.0,
-                key=f"layer_{i}_phi",
-            )
-            c_value = st.number_input(
-                "Cohesion c (psf)",
-                min_value=0.0,
-                max_value=5000.0,
-                value=float(layer.get("Cohesion c (psf)", 0.0)),
-                step=50.0,
-                key=f"layer_{i}_c",
-            )
-
-        previous_bottom = float(bottom_value)
-        updated_layers.append({
-            "Bottom Depth (ft)": float(bottom_value),
-            "Moist Unit Weight γm (pcf)": float(gamma_m_value),
-            "Saturated Unit Weight γsat (pcf)": float(gamma_sat_value),
-            "Friction Angle φ (deg)": float(phi_value),
-            "Cohesion c (psf)": float(c_value),
-        })
-
-    st.session_state.soil_layers = updated_layers
-    layer_df = pd.DataFrame(updated_layers)
-
-    st.subheader("📦 Surcharge")
-    surcharge_options = {
-        "None": "None",
-        "Uniform (Kq)": "Uniform",
-        "Line Load (NAVFAC/Boussinesq)": "Line Load",
-        "Point Load (NAVFAC/Boussinesq)": "Point Load",
-        "Strip Load (FHWA/WALLPRES)": "Strip Load",
-        "AASHTO Strip/Isolated Footing (2:1 Distribution)": "AASHTO",
-    }
-    surcharge_label = st.selectbox("Surcharge Type", list(surcharge_options.keys()))
-    surcharge_type = surcharge_options[surcharge_label]
-
-    q_uniform = 0.0
-    Q_line = 0.0
-    x_line = 5.0
-    Q_point = 0.0
-    x_point = 5.0
-    q_strip = 0.0
-    x_strip_near = 2.0
-    strip_width = 10.0
-    aashto_load_type = "Strip footing"
-    aashto_Pv = 0.0
-    aashto_bf = 2.0
-    aashto_L = 10.0
-    aashto_d = 5.0
-
-    if surcharge_type == "Uniform":
-        q_uniform = st.number_input("Uniform Surcharge q (psf)", 0.0, 10000.0, 250.0, 25.0)
-        st.caption("Calculated separately as Δp = K × q.")
-    elif surcharge_type == "Line Load":
-        Q_line = st.number_input("Line Load Q (lb/ft)", 0.0, 50000.0, 2000.0, 100.0)
-        x_line = st.number_input("Distance from Wall x (ft)", 0.5, 100.0, 6.0, 0.5)
-        st.caption("Calculated separately using the NAVFAC/Boussinesq wall-pressure equation.")
-    elif surcharge_type == "Point Load":
-        Q_point = st.number_input("Point Load Q (lb)", 0.0, 200000.0, 10000.0, 500.0)
-        x_point = st.number_input("Distance from Wall x (ft)", 0.5, 100.0, 6.0, 0.5)
-        st.caption("Calculated separately using the NAVFAC/Boussinesq wall-pressure equation.")
-    elif surcharge_type == "Strip Load":
-        q_strip = st.number_input("Strip Load q (psf)", 0.0, 10000.0, 600.0, 25.0)
-        x_strip_near = st.number_input("Distance to Near Edge x1 (ft)", 0.0, 200.0, 2.0, 0.5)
-        strip_width = st.number_input("Strip Width B (ft)", 0.1, 500.0, 30.0, 0.5)
-        st.caption("Calculated separately with the WALLPRES strip-load approach: x2 = x1 + B.")
-    elif surcharge_type == "AASHTO":
-        aashto_load_type = st.selectbox(
-            "AASHTO Load Type",
-            ["Strip footing", "Isolated rectangular footing", "Point load"],
-        )
-        aashto_d = st.number_input(
-            "Distance d from wall back face to load centroid (ft)",
-            0.0, 500.0, 5.0, 0.5,
-        )
-        if aashto_load_type == "Strip footing":
-            aashto_Pv = st.number_input("Strip load Pv (lb/ft)", 0.0, 500000.0, 2000.0, 100.0)
-            aashto_bf = st.number_input("Loaded width bf (ft)", 0.0, 200.0, 4.0, 0.5)
-            aashto_L = 0.0
-            st.caption("AASHTO 2:1 distribution: Δσv = Pv / D1, then lateral surcharge Δp = K × Δσv.")
-        elif aashto_load_type == "Isolated rectangular footing":
-            aashto_Pv = st.number_input("Total vertical load P'v (lb)", 0.0, 5000000.0, 50000.0, 1000.0)
-            aashto_bf = st.number_input("Footing width bf (ft)", 0.0, 200.0, 4.0, 0.5)
-            aashto_L = st.number_input("Footing length L (ft)", 0.1, 500.0, 10.0, 0.5)
-            st.caption("AASHTO 2:1 distribution: Δσv = P'v / [D1(L+z)], then lateral surcharge Δp = K × Δσv.")
-        elif aashto_load_type == "Point load":
-            aashto_Pv = st.number_input("Concentrated vertical load P'v (lb)", 0.0, 5000000.0, 50000.0, 1000.0)
-            aashto_bf = 0.0
-            aashto_L = 0.0
-            st.caption("AASHTO 2:1 distribution for point load: use bf = 0 and Δσv = P'v / D1², then lateral surcharge Δp = K × Δσv.")
-        st.caption("AASHTO surcharge pressure is set to zero above z2. Below z2: z2 = 2d - bf and D1 = (bf + z)/2 + d. For point load, bf = 0.")
-
-    st.subheader("📐 Pile / Wall Flexural Properties")
-    youngs_modulus_ksi = st.number_input(
-        "Young's Modulus E (ksi)",
-        min_value=1.0,
-        max_value=100000.0,
-        value=29000.0,
-        step=100.0,
-        format="%.1f",
-        help="Elastic modulus of the pile or wall section. Steel is commonly entered as approximately 29,000 ksi.",
-    )
-    moment_of_inertia_in4 = st.number_input(
-        "Moment of Inertia I (in⁴)",
-        min_value=0.01,
-        max_value=1.0e9,
-        value=5000.0,
-        step=100.0,
-        format="%.2f",
-        help="Gross or effective flexural moment of inertia of one pile or the selected wall strip.",
-    )
-    pile_tributary_width_ft = st.number_input(
-        "Pile Tributary Width / Spacing (ft)",
-        min_value=0.01,
-        max_value=100.0,
-        value=1.0,
-        step=0.5,
-        format="%.2f",
-        help="Converts wall pressure in psf to the line load carried by one pile. Use pile spacing for a discrete pile wall; use 1.0 ft for a one-foot wall strip.",
-    )
-
-    deflection_fixity_mode = st.selectbox(
-        "Deflection Boundary Condition",
-        [
-            "Point of fixity within embedment (Shoring Suite style)",
-            "Fixed at pile toe",
-        ],
-        index=0,
-        help=(
-            "The point-of-fixity option imposes zero rotation and zero deflection at a selected point within "
-            "the embedded length. The toe-fixed option imposes those conditions at the pile toe."
-        ),
-    )
-
-    embedment_depth_ft = max(float(H) - float(passive_start_depth), 0.0)
-    if deflection_fixity_mode.startswith("Point of fixity"):
-        fixity_percent = st.number_input(
-            "Point of Fixity below Excavation (% of Embedment)",
+        st.subheader("🟫 Passive Pressure Zone")
+        passive_start_depth = st.number_input(
+            "Passive Pressure Start Depth from Top (ft)",
             min_value=0.0,
+            max_value=float(H),
+            value=0.0,
+            step=0.5,
+            format="%.2f",
+            help="Passive resistance is set to zero above this depth. Below this depth, passive pressure is calculated using depth measured from this point."
+        )
+
+        st.subheader("💧 Groundwater")
+        include_water = st.checkbox("Include water table", True)
+        water_table = st.number_input("Water Table Depth from Top (ft)", 0.0, float(H), min(10.0, float(H)), 0.5)
+        gamma_w = st.number_input("Unit Weight of Water γw (pcf)", 60.0, 64.0, 62.4, 0.1)
+
+        st.subheader("🪨 Soil Properties / Layers")
+        st.caption("Use Add Layer to create more layers. Enter each layer bottom depth from the top; each layer thickness can be any value greater than 0 ft.")
+
+        if "soil_layers" not in st.session_state:
+            st.session_state.soil_layers = default_layers(1, float(H)).to_dict("records")
+
+        if st.form_submit_button("➕ Add Layer", use_container_width=True):
+            st.session_state["analysis_has_run"] = False
+            layers = st.session_state.soil_layers
+            if len(layers) < 8:
+                if layers:
+                    previous_top = 0.0 if len(layers) == 1 else float(layers[-2]["Bottom Depth (ft)"])
+                    split_depth = round((previous_top + float(H)) / 2.0, 2)
+                    layers[-1]["Bottom Depth (ft)"] = max(previous_top + 0.1, min(split_depth, float(H) - 0.1))
+                    template = layers[-1].copy()
+                    template["Bottom Depth (ft)"] = float(H)
+                else:
+                    template = default_layers(1, float(H)).iloc[0].to_dict()
+                layers.append(template)
+                st.session_state.soil_layers = layers
+            else:
+                st.warning("Maximum 8 layers allowed.")
+
+        if len(st.session_state.soil_layers) > 1:
+            if st.form_submit_button("➖ Remove Last Layer", use_container_width=True):
+                st.session_state.soil_layers = st.session_state.soil_layers[:-1]
+                st.session_state.soil_layers[-1]["Bottom Depth (ft)"] = float(H)
+                st.session_state["analysis_has_run"] = False
+
+        updated_layers = []
+        previous_bottom = 0.0
+        for i, layer in enumerate(st.session_state.soil_layers):
+            with st.container(border=True):
+                st.markdown(f"**Layer {i + 1}**")
+                # Bottom depth is an editable layer boundary.
+                # Each layer only needs a thickness greater than zero; the last
+                # layer is no longer locked to the wall height. If the final
+                # boundary is above the wall base, the calculation extends the
+                # last entered layer properties down to H.
+                bottom_min = min(float(H), previous_bottom + 0.01)
+                bottom_max = float(H)
+                bottom_default = float(layer.get("Bottom Depth (ft)", bottom_max))
+                bottom_default = min(max(bottom_default, bottom_min), bottom_max)
+
+                bottom_value = st.number_input(
+                    "Bottom Depth from Top (ft)",
+                    min_value=bottom_min,
+                    max_value=bottom_max,
+                    value=bottom_default,
+                    step=0.1,
+                    format="%.2f",
+                    key=f"layer_{i}_bottom",
+                    help="Enter the bottom depth of this layer. Layer thickness must be greater than 0 ft."
+                )
+
+                gamma_m_value = st.number_input(
+                    "Moist Unit Weight γm (pcf)",
+                    min_value=50.0,
+                    max_value=160.0,
+                    value=float(layer.get("Moist Unit Weight γm (pcf)", 120.0)),
+                    step=1.0,
+                    key=f"layer_{i}_gamma_m",
+                )
+                gamma_sat_value = st.number_input(
+                    "Saturated Unit Weight γsat (pcf)",
+                    min_value=50.0,
+                    max_value=170.0,
+                    value=float(layer.get("Saturated Unit Weight γsat (pcf)", 125.0)),
+                    step=1.0,
+                    key=f"layer_{i}_gamma_sat",
+                )
+                phi_value = st.number_input(
+                    "Friction Angle φ (deg)",
+                    min_value=0.0,
+                    max_value=50.0,
+                    value=float(layer.get("Friction Angle φ (deg)", 30.0)),
+                    step=1.0,
+                    key=f"layer_{i}_phi",
+                )
+                c_value = st.number_input(
+                    "Cohesion c (psf)",
+                    min_value=0.0,
+                    max_value=5000.0,
+                    value=float(layer.get("Cohesion c (psf)", 0.0)),
+                    step=50.0,
+                    key=f"layer_{i}_c",
+                )
+
+            previous_bottom = float(bottom_value)
+            updated_layers.append({
+                "Bottom Depth (ft)": float(bottom_value),
+                "Moist Unit Weight γm (pcf)": float(gamma_m_value),
+                "Saturated Unit Weight γsat (pcf)": float(gamma_sat_value),
+                "Friction Angle φ (deg)": float(phi_value),
+                "Cohesion c (psf)": float(c_value),
+            })
+
+        st.session_state.soil_layers = updated_layers
+        layer_df = pd.DataFrame(updated_layers)
+
+        st.subheader("📦 Surcharge")
+        surcharge_options = {
+            "None": "None",
+            "Uniform (Kq)": "Uniform",
+            "Line Load (NAVFAC/Boussinesq)": "Line Load",
+            "Point Load (NAVFAC/Boussinesq)": "Point Load",
+            "Strip Load (FHWA/WALLPRES)": "Strip Load",
+            "AASHTO Strip/Isolated Footing (2:1 Distribution)": "AASHTO",
+        }
+        surcharge_label = st.selectbox("Surcharge Type", list(surcharge_options.keys()))
+        surcharge_type = surcharge_options[surcharge_label]
+
+        q_uniform = 0.0
+        Q_line = 0.0
+        x_line = 5.0
+        Q_point = 0.0
+        x_point = 5.0
+        q_strip = 0.0
+        x_strip_near = 2.0
+        strip_width = 10.0
+        aashto_load_type = "Strip footing"
+        aashto_Pv = 0.0
+        aashto_bf = 2.0
+        aashto_L = 10.0
+        aashto_d = 5.0
+
+        if surcharge_type == "Uniform":
+            q_uniform = st.number_input("Uniform Surcharge q (psf)", 0.0, 10000.0, 250.0, 25.0)
+            st.caption("Calculated separately as Δp = K × q.")
+        elif surcharge_type == "Line Load":
+            Q_line = st.number_input("Line Load Q (lb/ft)", 0.0, 50000.0, 2000.0, 100.0)
+            x_line = st.number_input("Distance from Wall x (ft)", 0.5, 100.0, 6.0, 0.5)
+            st.caption("Calculated separately using the NAVFAC/Boussinesq wall-pressure equation.")
+        elif surcharge_type == "Point Load":
+            Q_point = st.number_input("Point Load Q (lb)", 0.0, 200000.0, 10000.0, 500.0)
+            x_point = st.number_input("Distance from Wall x (ft)", 0.5, 100.0, 6.0, 0.5)
+            st.caption("Calculated separately using the NAVFAC/Boussinesq wall-pressure equation.")
+        elif surcharge_type == "Strip Load":
+            q_strip = st.number_input("Strip Load q (psf)", 0.0, 10000.0, 600.0, 25.0)
+            x_strip_near = st.number_input("Distance to Near Edge x1 (ft)", 0.0, 200.0, 2.0, 0.5)
+            strip_width = st.number_input("Strip Width B (ft)", 0.1, 500.0, 30.0, 0.5)
+            st.caption("Calculated separately with the WALLPRES strip-load approach: x2 = x1 + B.")
+        elif surcharge_type == "AASHTO":
+            aashto_load_type = st.selectbox(
+                "AASHTO Load Type",
+                ["Strip footing", "Isolated rectangular footing", "Point load"],
+            )
+            aashto_d = st.number_input(
+                "Distance d from wall back face to load centroid (ft)",
+                0.0, 500.0, 5.0, 0.5,
+            )
+            if aashto_load_type == "Strip footing":
+                aashto_Pv = st.number_input("Strip load Pv (lb/ft)", 0.0, 500000.0, 2000.0, 100.0)
+                aashto_bf = st.number_input("Loaded width bf (ft)", 0.0, 200.0, 4.0, 0.5)
+                aashto_L = 0.0
+                st.caption("AASHTO 2:1 distribution: Δσv = Pv / D1, then lateral surcharge Δp = K × Δσv.")
+            elif aashto_load_type == "Isolated rectangular footing":
+                aashto_Pv = st.number_input("Total vertical load P'v (lb)", 0.0, 5000000.0, 50000.0, 1000.0)
+                aashto_bf = st.number_input("Footing width bf (ft)", 0.0, 200.0, 4.0, 0.5)
+                aashto_L = st.number_input("Footing length L (ft)", 0.1, 500.0, 10.0, 0.5)
+                st.caption("AASHTO 2:1 distribution: Δσv = P'v / [D1(L+z)], then lateral surcharge Δp = K × Δσv.")
+            elif aashto_load_type == "Point load":
+                aashto_Pv = st.number_input("Concentrated vertical load P'v (lb)", 0.0, 5000000.0, 50000.0, 1000.0)
+                aashto_bf = 0.0
+                aashto_L = 0.0
+                st.caption("AASHTO 2:1 distribution for point load: use bf = 0 and Δσv = P'v / D1², then lateral surcharge Δp = K × Δσv.")
+            st.caption("AASHTO surcharge pressure is set to zero above z2. Below z2: z2 = 2d - bf and D1 = (bf + z)/2 + d. For point load, bf = 0.")
+
+        st.subheader("📐 Pile / Wall Flexural Properties")
+        youngs_modulus_ksi = st.number_input(
+            "Young's Modulus E (ksi)",
+            min_value=1.0,
+            max_value=100000.0,
+            value=29000.0,
+            step=100.0,
+            format="%.1f",
+            help="Elastic modulus of the pile or wall section. Steel is commonly entered as approximately 29,000 ksi.",
+        )
+        moment_of_inertia_in4 = st.number_input(
+            "Moment of Inertia I (in⁴)",
+            min_value=0.01,
+            max_value=1.0e9,
+            value=5000.0,
+            step=100.0,
+            format="%.2f",
+            help="Gross or effective flexural moment of inertia of one pile or the selected wall strip.",
+        )
+        pile_tributary_width_ft = st.number_input(
+            "Pile Tributary Width / Spacing (ft)",
+            min_value=0.01,
             max_value=100.0,
-            value=60.0,
+            value=1.0,
+            step=0.5,
+            format="%.2f",
+            help="Converts wall pressure in psf to the line load carried by one pile. Use pile spacing for a discrete pile wall; use 1.0 ft for a one-foot wall strip.",
+        )
+
+        deflection_fixity_mode = st.selectbox(
+            "Deflection Boundary Condition",
+            [
+                "Point of fixity within embedment (Shoring Suite style)",
+                "Fixed at pile toe",
+            ],
+            index=0,
+            help=(
+                "The point-of-fixity option imposes zero rotation and zero deflection at a selected point within "
+                "the embedded length. The toe-fixed option imposes those conditions at the pile toe."
+            ),
+        )
+
+        embedment_depth_ft = max(float(H) - float(passive_start_depth), 0.0)
+        if deflection_fixity_mode.startswith("Point of fixity"):
+            fixity_percent = st.number_input(
+                "Point of Fixity below Excavation (% of Embedment)",
+                min_value=0.0,
+                max_value=100.0,
+                value=60.0,
+                step=1.0,
+                format="%.1f",
+                help=(
+                    "Measured downward from the passive-pressure start/excavation depth. "
+                    "A value between about 50% and 67% is commonly used for comparison with Shoring Suite."
+                ),
+            )
+            fixity_fraction = float(fixity_percent) / 100.0
+            point_of_fixity_depth = float(passive_start_depth) + fixity_fraction * embedment_depth_ft
+            deflection_boundary_label = (
+                f"Point of fixity at {point_of_fixity_depth:.2f} ft "
+                f"({fixity_percent:.1f}% of embedment)"
+            )
+            st.caption(
+                f"Embedment = {embedment_depth_ft:.2f} ft; calculated point of fixity = "
+                f"{point_of_fixity_depth:.2f} ft below the wall top."
+            )
+        else:
+            fixity_percent = 100.0
+            fixity_fraction = 1.0
+            point_of_fixity_depth = float(H)
+            deflection_boundary_label = f"Pile toe fixed at {point_of_fixity_depth:.2f} ft"
+
+        st.caption(
+            "Deflection is calculated by double integration of M/EI. The selected fixity point has zero rotation "
+            "and zero deflection. The imposed passive-pressure diagram is not iterated with wall movement."
+        )
+
+        st.subheader("🏛️ USACE Cantilever Method")
+        run_usace_analysis = st.checkbox(
+            "Run USACE cantilever equilibrium analysis",
+            value=True,
+            help=(
+                "Implements the cantilever-wall stability procedure in USACE EM 1110-2-2504. "
+                "The solver determines the required penetration and transition point from simultaneous "
+                "horizontal-force and moment equilibrium."
+            ),
+        )
+        usace_passive_fs = st.number_input(
+            "USACE Passive-Pressure Safety Factor FSp",
+            min_value=1.0,
+            max_value=5.0,
+            value=1.50,
+            step=0.05,
+            format="%.2f",
+            help=(
+                "USACE reduces passive soil strength using tan(phi_eff)=tan(phi)/FSp and c_eff=c/FSp. "
+                "For a usual-condition retaining wall in free-draining soil, EM 1110-2-2504 lists 1.50."
+            ),
+        )
+        usace_default_max_embedment = max(
+            20.0,
+            3.0 * max(float(H) - float(passive_start_depth), 1.0),
+            3.0 * max(float(passive_start_depth), 1.0),
+        )
+        usace_max_embedment_ft = st.number_input(
+            "USACE Maximum Trial Embedment (ft)",
+            min_value=1.0,
+            max_value=500.0,
+            value=float(min(usace_default_max_embedment, 500.0)),
             step=1.0,
             format="%.1f",
             help=(
-                "Measured downward from the passive-pressure start/excavation depth. "
-                "A value between about 50% and 67% is commonly used for comparison with Shoring Suite."
+                "Upper search bound for the required penetration below the excavation/passive-pressure start depth. "
+                "The last entered soil layer is extended below the entered wall bottom for this trial calculation."
             ),
         )
-        fixity_fraction = float(fixity_percent) / 100.0
-        point_of_fixity_depth = float(passive_start_depth) + fixity_fraction * embedment_depth_ft
-        deflection_boundary_label = (
-            f"Point of fixity at {point_of_fixity_depth:.2f} ft "
-            f"({fixity_percent:.1f}% of embedment)"
+        usace_solver_points = st.slider(
+            "USACE Final Diagram Points",
+            min_value=201,
+            max_value=1201,
+            value=301,
+            step=100,
         )
         st.caption(
-            f"Embedment = {embedment_depth_ft:.2f} ft; calculated point of fixity = "
-            f"{point_of_fixity_depth:.2f} ft below the wall top."
+            "The USACE transition point is near the point of zero displacement. For the optional elastic-deflection "
+            "diagram, it is used as an idealized zero-rotation and zero-deflection point; that structural boundary "
+            "condition is an approximation beyond the rotational-stability procedure in the manual. Passive pressure "
+            "continues to use this app's Kp = 1/Ka convention after the USACE strength reduction is applied."
         )
-    else:
-        fixity_percent = 100.0
-        fixity_fraction = 1.0
-        point_of_fixity_depth = float(H)
-        deflection_boundary_label = f"Pile toe fixed at {point_of_fixity_depth:.2f} ft"
 
-    st.caption(
-        "Deflection is calculated by double integration of M/EI. The selected fixity point has zero rotation "
-        "and zero deflection. The imposed passive-pressure diagram is not iterated with wall movement."
+        st.subheader("📊 Display Options")
+        n_points = st.slider("Pressure Diagram Points", 50, 500, 151)
+        show_cohesion = st.checkbox("Include cohesion term", True)
+        show_total_pressure = st.checkbox("Show total pressure including water", True)
+
+
+        st.markdown("---")
+        run_analysis_button = st.form_submit_button(
+            "▶️ Run Analysis",
+            type="primary",
+            use_container_width=True,
+        )
+        st.caption(
+            "Change any parameters above, then click Run Analysis. "
+            "Inputs inside this form do not rerun the calculation until submitted."
+        )
+
+        if run_analysis_button:
+            st.session_state["analysis_has_run"] = True
+            st.session_state["analysis_run_number"] = (
+                int(st.session_state.get("analysis_run_number", 0)) + 1
+            )
+
+
+# Do not execute the engineering calculations until the user submits the form.
+if not st.session_state.get("analysis_has_run", False):
+    st.info(
+        "Enter or revise the parameters in the sidebar, then click **Run Analysis**. "
+        "The pressure, USACE, shear, moment, and deflection calculations will run only after submission."
     )
-
-    st.subheader("📊 Display Options")
-    n_points = st.slider("Pressure Diagram Points", 50, 500, 151)
-    show_cohesion = st.checkbox("Include cohesion term", True)
-    show_total_pressure = st.checkbox("Show total pressure including water", True)
+    st.stop()
 
 # -----------------------------
 # Soil layer cleanup
@@ -404,35 +487,60 @@ def properties_at_depth(z):
 
 
 def vertical_stresses_at_depth(z):
-    """Returns total vertical stress, pore pressure, and effective vertical stress at depth z from the top of the wall."""
+    """Return total vertical stress, pore pressure, and effective vertical stress at depth z.
+
+    For the standard wall calculation, z is no greater than H. The USACE
+    penetration solver may trial a deeper wall bottom; in that case the last
+    entered soil layer is extended below its entered bottom depth.
+    """
     if z <= 0:
         return 0.0, 0.0, 0.0
 
+    def segment_total_stress(seg_top, seg_bot, gamma_m, gamma_sat):
+        if seg_bot <= seg_top:
+            return 0.0
+        if not include_water:
+            return gamma_m * (seg_bot - seg_top)
+        if seg_bot <= water_table:
+            return gamma_m * (seg_bot - seg_top)
+        if seg_top >= water_table:
+            return gamma_sat * (seg_bot - seg_top)
+        return (
+            gamma_m * (water_table - seg_top)
+            + gamma_sat * (seg_bot - water_table)
+        )
+
     total = 0.0
     top = 0.0
+    last_row = layer_df.iloc[-1]
+
     for _, row in layer_df.iterrows():
-        bottom = min(float(row["Bottom Depth (ft)"]), H)
+        bottom = float(row["Bottom Depth (ft)"])
         if z <= top:
             break
-        seg_top = top
-        seg_bot = min(z, bottom)
-        if seg_bot > seg_top:
-            gm = float(row["Moist Unit Weight γm (pcf)"])
-            gsat = float(row["Saturated Unit Weight γsat (pcf)"])
-            if include_water:
-                if seg_bot <= water_table:
-                    total += gm * (seg_bot - seg_top)
-                elif seg_top >= water_table:
-                    total += gsat * (seg_bot - seg_top)
-                else:
-                    total += gm * (water_table - seg_top) + gsat * (seg_bot - water_table)
-            else:
-                total += gm * (seg_bot - seg_top)
+        seg_bot = min(float(z), bottom)
+        if seg_bot > top:
+            total += segment_total_stress(
+                top,
+                seg_bot,
+                float(row["Moist Unit Weight γm (pcf)"]),
+                float(row["Saturated Unit Weight γsat (pcf)"]),
+            )
         top = bottom
+        last_row = row
         if top >= z:
             break
 
-    u = gamma_w * max(0.0, z - water_table) if include_water else 0.0
+    # Extend the last entered layer when the USACE solver trials a bottom below H.
+    if top < z:
+        total += segment_total_stress(
+            top,
+            float(z),
+            float(last_row["Moist Unit Weight γm (pcf)"]),
+            float(last_row["Saturated Unit Weight γsat (pcf)"]),
+        )
+
+    u = gamma_w * max(0.0, float(z) - float(water_table)) if include_water else 0.0
     effective = max(total - u, 0.0)
     return total, u, effective
 
@@ -780,6 +888,25 @@ def calculate_cantilever_deflection(moment_kip_ft_per_ft):
     return curvature_per_in, rotation_rad, deflection_in
 
 
+def calculate_elastic_deflection_on_grid(moment_kip_ft_per_ft, depth_grid_ft, fixed_depth_ft):
+    """Return curvature, rotation, and deflection for an arbitrary depth grid."""
+    depth_grid_ft = np.asarray(depth_grid_ft, dtype=float)
+    depth_in = depth_grid_ft * 12.0
+    EI_kip_in2 = max(float(youngs_modulus_ksi) * float(moment_of_inertia_in4), 1.0e-12)
+    moment_kip_in = (
+        np.asarray(moment_kip_ft_per_ft, dtype=float)
+        * float(pile_tributary_width_ft)
+        * 12.0
+    )
+    curvature_per_in = moment_kip_in / EI_kip_in2
+    rotation_rad, deflection_in = integrate_curvature_from_fixity(
+        curvature_per_in,
+        depth_in,
+        float(fixed_depth_ft) * 12.0,
+    )
+    return curvature_per_in, rotation_rad, deflection_in
+
+
 curvature_rankine, rotation_rankine, deflection_rankine = calculate_cantilever_deflection(moment_rankine)
 curvature_coulomb, rotation_coulomb, deflection_coulomb = calculate_cantilever_deflection(moment_coulomb)
 
@@ -793,6 +920,441 @@ max_deflection_depth_rankine = float(depths[int(np.argmax(np.abs(deflection_rank
 max_deflection_depth_coulomb = float(depths[int(np.argmax(np.abs(deflection_coulomb)))]) if len(deflection_coulomb) else 0.0
 top_deflection_rankine = float(deflection_rankine[0]) if len(deflection_rankine) else 0.0
 top_deflection_coulomb = float(deflection_coulomb[0]) if len(deflection_coulomb) else 0.0
+
+
+# -----------------------------
+# USACE EM 1110-2-2504 cantilever-wall equilibrium method
+# -----------------------------
+def usace_pressure_components(z_arr, method):
+    """Return USACE net-active and full-net-passive pressure arrays.
+
+    Positive pressure acts toward the excavation/dredge side. In accordance
+    with EM 1110-2-2504, passive strengths are reduced by FSp:
+    tan(phi_eff) = tan(phi) / FSp and c_eff = c / FSp.
+    """
+    z_arr = np.asarray(z_arr, dtype=float)
+    sigma_eff_retained = np.zeros_like(z_arr)
+    water_retained = np.zeros_like(z_arr)
+    sigma_eff_dredge = np.zeros_like(z_arr)
+    water_dredge = np.zeros_like(z_arr)
+    phi_values = np.zeros_like(z_arr)
+    cohesion_values = np.zeros_like(z_arr)
+
+    for i, z in enumerate(z_arr):
+        _, u_r, sig_r = vertical_stresses_at_depth(float(z))
+        _, u_d, sig_d = vertical_stresses_between_depths(
+            float(passive_start_depth), float(z)
+        )
+        phi_i, c_i = properties_at_depth(float(z))
+        sigma_eff_retained[i] = sig_r
+        water_retained[i] = u_r if show_total_pressure else 0.0
+        sigma_eff_dredge[i] = sig_d
+        water_dredge[i] = u_d if show_total_pressure else 0.0
+        phi_values[i] = phi_i
+        cohesion_values[i] = c_i if show_cohesion else 0.0
+
+    passive_phi = np.arctan(
+        np.tan(phi_values) / max(float(usace_passive_fs), 1.0e-9)
+    )
+    passive_c = cohesion_values / max(float(usace_passive_fs), 1.0e-9)
+
+    if method == "Rankine":
+        Ka_active = np.array([rankine_Ka(phi, beta) for phi in phi_values])
+        Ka_passive_basis = np.array(
+            [rankine_Ka(phi_eff, beta) for phi_eff in passive_phi]
+        )
+    elif method == "Coulomb":
+        Ka_active = np.array(
+            [coulomb_Ka(phi, delta, alpha, beta) for phi in phi_values]
+        )
+        Ka_active_fallback = np.array(
+            [rankine_Ka(phi, beta) for phi in phi_values]
+        )
+        Ka_active = np.where(np.isfinite(Ka_active), Ka_active, Ka_active_fallback)
+
+        Ka_passive_basis = np.array(
+            [coulomb_Ka(phi_eff, delta, alpha, beta) for phi_eff in passive_phi]
+        )
+        Ka_passive_fallback = np.array(
+            [rankine_Ka(phi_eff, beta) for phi_eff in passive_phi]
+        )
+        Ka_passive_basis = np.where(
+            np.isfinite(Ka_passive_basis),
+            Ka_passive_basis,
+            Ka_passive_fallback,
+        )
+    else:
+        raise ValueError("USACE method must be 'Rankine' or 'Coulomb'.")
+
+    Ka_active = np.clip(Ka_active, 1.0e-9, None)
+    Kp_reduced = 1.0 / np.clip(Ka_passive_basis, 1.0e-9, None)
+
+    retained_active_eff = np.clip(
+        Ka_active * sigma_eff_retained
+        - 2.0 * cohesion_values * safe_sqrt(Ka_active),
+        0.0,
+        None,
+    )
+    dredge_active_eff = np.clip(
+        Ka_active * sigma_eff_dredge
+        - 2.0 * cohesion_values * safe_sqrt(Ka_active),
+        0.0,
+        None,
+    )
+    retained_passive_eff = (
+        Kp_reduced * sigma_eff_retained
+        + 2.0 * passive_c * safe_sqrt(Kp_reduced)
+    )
+    dredge_passive_eff = (
+        Kp_reduced * sigma_eff_dredge
+        + 2.0 * passive_c * safe_sqrt(Kp_reduced)
+    )
+
+    dredge_mask = z_arr >= float(passive_start_depth)
+    dredge_active_total = np.where(
+        dredge_mask,
+        dredge_active_eff + water_dredge,
+        0.0,
+    )
+    dredge_passive_total = np.where(
+        dredge_mask,
+        dredge_passive_eff + water_dredge,
+        0.0,
+    )
+    retained_active_total = retained_active_eff + water_retained
+    retained_passive_total = retained_passive_eff + water_retained
+
+    q_for_surcharge = q_uniform if surcharge_type == "Uniform" else q_strip
+    usace_surcharge_active = surcharge_pressure(
+        z_arr,
+        surcharge_type,
+        q=q_for_surcharge,
+        Q=selected_Q,
+        x=selected_x,
+        K_arr=Ka_active,
+        x1=x_strip_near,
+        width=strip_width,
+        aashto_load_type=aashto_load_type,
+        aashto_Pv=aashto_Pv,
+        aashto_bf=aashto_bf,
+        aashto_L=aashto_L,
+        aashto_d=aashto_d,
+    )
+    usace_surcharge_passive = surcharge_pressure(
+        z_arr,
+        surcharge_type,
+        q=q_for_surcharge,
+        Q=selected_Q,
+        x=selected_x,
+        K_arr=Kp_reduced,
+        x1=x_strip_near,
+        width=strip_width,
+        aashto_load_type=aashto_load_type,
+        aashto_Pv=aashto_Pv,
+        aashto_bf=aashto_bf,
+        aashto_L=aashto_L,
+        aashto_d=aashto_d,
+    )
+
+    net_active = (
+        retained_active_total
+        - dredge_passive_total
+        + usace_surcharge_active
+    )
+    net_passive = (
+        retained_passive_total
+        - dredge_active_total
+        + usace_surcharge_passive
+    )
+
+    return {
+        "net_active": net_active,
+        "net_passive": net_passive,
+        "Ka_active": Ka_active,
+        "Kp_reduced": Kp_reduced,
+    }
+
+
+def usace_trial_solution(
+    embedment_ft,
+    transition_fraction,
+    method,
+    point_count=241,
+    master_depths=None,
+    master_components=None,
+):
+    """Evaluate one USACE trial embedment and transition location."""
+    embedment_ft = float(embedment_ft)
+    transition_fraction = float(transition_fraction)
+    bottom_depth = float(passive_start_depth) + embedment_ft
+    transition_depth = (
+        float(passive_start_depth) + transition_fraction * embedment_ft
+    )
+
+    z = np.linspace(0.0, bottom_depth, max(int(point_count), 81))
+
+    # The earth-pressure components depend on depth and the selected method,
+    # but not on the trial embedment or transition ratio. During the USACE
+    # search they are therefore calculated once on a master depth grid and
+    # interpolated for each trial. This removes thousands of repeated layered-
+    # stress calculations and keeps the Streamlit app responsive.
+    if master_depths is not None and master_components is not None:
+        master_depths = np.asarray(master_depths, dtype=float)
+        net_active = np.interp(
+            z, master_depths, np.asarray(master_components["net_active"], dtype=float)
+        )
+        net_passive = np.interp(
+            z, master_depths, np.asarray(master_components["net_passive"], dtype=float)
+        )
+    else:
+        components = usace_pressure_components(z, method)
+        net_active = components["net_active"]
+        net_passive = components["net_passive"]
+
+    p_transition = float(np.interp(transition_depth, z, net_active))
+    p_bottom_passive = float(net_passive[-1])
+    denominator = max(bottom_depth - transition_depth, 1.0e-9)
+    lower_linear = p_transition + (
+        p_bottom_passive - p_transition
+    ) * (z - transition_depth) / denominator
+    design_pressure = np.where(z <= transition_depth, net_active, lower_linear)
+
+    force_residual = float(np.trapezoid(design_pressure, z))
+    moment_residual_about_bottom = float(
+        np.trapezoid(design_pressure * (bottom_depth - z), z)
+    )
+    pressure_scale = max(float(np.max(np.abs(design_pressure))), 1.0)
+    normalized_residual = np.array(
+        [
+            force_residual / (pressure_scale * max(bottom_depth, 1.0)),
+            moment_residual_about_bottom
+            / (pressure_scale * max(bottom_depth, 1.0) ** 2),
+        ],
+        dtype=float,
+    )
+
+    return {
+        "depths": z,
+        "net_active": net_active,
+        "net_passive": net_passive,
+        "design_pressure": design_pressure,
+        "bottom_depth": bottom_depth,
+        "embedment": embedment_ft,
+        "transition_depth": transition_depth,
+        "transition_fraction": transition_fraction,
+        "z_above_bottom": bottom_depth - transition_depth,
+        "pressure_at_transition": p_transition,
+        "full_net_passive_at_bottom": p_bottom_passive,
+        "force_residual": force_residual,
+        "moment_residual": moment_residual_about_bottom,
+        "normalized_residual": normalized_residual,
+    }
+
+
+def bounded_grid_search_numpy(
+    objective,
+    x0,
+    lower_bounds,
+    upper_bounds,
+    coarse_points=11,
+    refinement_points=7,
+    refinement_levels=8,
+):
+    """Fast bounded two-variable search implemented with NumPy only.
+
+    The USACE equilibrium problem contains only two unknowns: embedment and
+    transition-depth ratio. A small global grid is followed by shrinking local
+    grids. Objective values are cached, so repeated candidate points do not
+    trigger duplicate pressure integrations.
+    """
+    lower = np.asarray(lower_bounds, dtype=float)
+    upper = np.asarray(upper_bounds, dtype=float)
+    x0 = np.clip(np.asarray(x0, dtype=float), lower, upper)
+    cache = {}
+    nfev = 0
+
+    def evaluate(values):
+        nonlocal nfev
+        values = np.clip(np.asarray(values, dtype=float), lower, upper)
+        key = tuple(np.round(values, 12))
+        if key in cache:
+            return cache[key]
+        residual = np.asarray(objective(values), dtype=float)
+        nfev += 1
+        if residual.shape != (2,) or not np.all(np.isfinite(residual)):
+            residual = np.array([1.0e6, 1.0e6], dtype=float)
+        cost = 0.5 * float(np.dot(residual, residual))
+        result = (cost, values.copy(), residual.copy())
+        cache[key] = result
+        return result
+
+    candidates = [evaluate(x0)]
+    x_values = np.linspace(lower[0], upper[0], max(int(coarse_points), 5))
+    y_values = np.linspace(lower[1], upper[1], max(int(coarse_points), 5))
+    for x_value in x_values:
+        for y_value in y_values:
+            candidates.append(evaluate([x_value, y_value]))
+
+    candidates.sort(key=lambda item: item[0])
+    # Refine the best global point and two alternate low-cost basins.
+    centers = [item[1].copy() for item in candidates[:3]]
+    global_best = candidates[0]
+    coarse_step = np.array(
+        [
+            (upper[0] - lower[0]) / max(len(x_values) - 1, 1),
+            (upper[1] - lower[1]) / max(len(y_values) - 1, 1),
+        ],
+        dtype=float,
+    )
+
+    for initial_center in centers:
+        center = initial_center.copy()
+        half_width = np.maximum(1.5 * coarse_step, np.array([0.05, 0.01]))
+        local_best = evaluate(center)
+
+        for _ in range(max(int(refinement_levels), 1)):
+            x_lo = max(lower[0], center[0] - half_width[0])
+            x_hi = min(upper[0], center[0] + half_width[0])
+            y_lo = max(lower[1], center[1] - half_width[1])
+            y_hi = min(upper[1], center[1] + half_width[1])
+            local_candidates = []
+            for x_value in np.linspace(x_lo, x_hi, max(int(refinement_points), 5)):
+                for y_value in np.linspace(y_lo, y_hi, max(int(refinement_points), 5)):
+                    local_candidates.append(evaluate([x_value, y_value]))
+            local_candidates.sort(key=lambda item: item[0])
+            if local_candidates[0][0] < local_best[0]:
+                local_best = local_candidates[0]
+                center = local_best[1].copy()
+            half_width *= 0.35
+
+        if local_best[0] < global_best[0]:
+            global_best = local_best
+
+    return {
+        "x": global_best[1],
+        "fun": global_best[2],
+        "cost": global_best[0],
+        "nfev": nfev,
+        "success": bool(np.all(np.isfinite(global_best[2]))),
+    }
+
+def solve_usace_cantilever(method):
+    """Solve USACE force and moment equilibrium for penetration and transition."""
+    if not run_usace_analysis:
+        return {"success": False, "message": "USACE analysis is disabled."}
+    if float(passive_start_depth) <= 0.0:
+        return {
+            "success": False,
+            "message": (
+                "The USACE cantilever method requires an excavation/dredge-line depth "
+                "greater than 0 ft."
+            ),
+        }
+
+    min_embedment = max(0.25, 0.025 * float(passive_start_depth))
+    max_embedment = max(float(usace_max_embedment_ft), min_embedment + 0.5)
+
+    # Precompute the depth-dependent pressure components once. Trial solutions
+    # then use interpolation instead of recalculating layered vertical stresses
+    # at every optimization evaluation.
+    maximum_bottom_depth = float(passive_start_depth) + max_embedment
+    master_point_count = int(
+        min(
+            3001,
+            max(801, 2 * int(usace_solver_points) + 1, 4 * int(n_points) + 1),
+        )
+    )
+    master_depths = np.linspace(0.0, maximum_bottom_depth, master_point_count)
+    master_components = usace_pressure_components(master_depths, method)
+
+    def objective(x):
+        trial = usace_trial_solution(
+            x[0],
+            x[1],
+            method,
+            point_count=121,
+            master_depths=master_depths,
+            master_components=master_components,
+        )
+        return trial["normalized_residual"]
+
+    current_embedment = max(float(H) - float(passive_start_depth), min_embedment)
+    result = bounded_grid_search_numpy(
+        objective,
+        x0=[min(max(current_embedment, min_embedment), max_embedment), 0.60],
+        lower_bounds=[min_embedment, 0.01],
+        upper_bounds=[max_embedment, 0.99],
+        coarse_points=11,
+        refinement_points=7,
+        refinement_levels=8,
+    )
+
+    final = usace_trial_solution(
+        result["x"][0],
+        result["x"][1],
+        method,
+        point_count=max(int(usace_solver_points), int(n_points), 301),
+        master_depths=master_depths,
+        master_components=master_components,
+    )
+    final_residual_norm = float(np.linalg.norm(final["normalized_residual"]))
+    at_upper_bound = final["embedment"] >= 0.999 * max_embedment
+    success = final_residual_norm <= 5.0e-4 and not at_upper_bound
+
+    if not success:
+        message = (
+            f"No converged {method} equilibrium solution was found within the maximum "
+            f"trial embedment of {max_embedment:.2f} ft. Increase the search limit or "
+            "review the pressure inputs."
+        )
+        final.update(
+            {
+                "success": False,
+                "message": message,
+                "residual_norm": final_residual_norm,
+                "solver_evaluations": int(result.get("nfev", 0)),
+            }
+        )
+        return final
+
+    shear = cumulative_trapezoid_np(final["design_pressure"], final["depths"]) / 1000.0
+    moment = cumulative_trapezoid_np(shear, final["depths"])
+    curvature, rotation, deflection = calculate_elastic_deflection_on_grid(
+        moment,
+        final["depths"],
+        final["transition_depth"],
+    )
+
+    final.update(
+        {
+            "success": True,
+            "message": "Converged",
+            "shear": shear,
+            "moment": moment,
+            "curvature": curvature,
+            "rotation": rotation,
+            "deflection": deflection,
+            "max_abs_shear": float(np.max(np.abs(shear))),
+            "max_abs_moment": float(np.max(np.abs(moment))),
+            "top_deflection": float(deflection[0]),
+            "max_abs_deflection": float(np.max(np.abs(deflection))),
+            "max_deflection_depth": float(
+                final["depths"][int(np.argmax(np.abs(deflection)))]
+            ),
+            "residual_norm": final_residual_norm,
+            "solver_evaluations": int(result.get("nfev", 0)),
+        }
+    )
+    return final
+
+
+if run_usace_analysis:
+    with st.spinner("Solving USACE force and moment equilibrium..."):
+        usace_rankine = solve_usace_cantilever("Rankine")
+        usace_coulomb = solve_usace_cantilever("Coulomb")
+else:
+    usace_rankine = {"success": False, "message": "USACE analysis is disabled."}
+    usace_coulomb = {"success": False, "message": "USACE analysis is disabled."}
 
 
 # -----------------------------
@@ -1139,6 +1701,169 @@ def create_net_shear_moment_figure():
     return fig
 
 
+def create_usace_cantilever_figure():
+    """Create USACE pressure, shear, moment, and approximate deflection diagrams."""
+    fig, axes = plt.subplots(2, 4, figsize=(19, 11), sharey="row")
+    solutions = [("Rankine", usace_rankine), ("Coulomb", usace_coulomb)]
+
+    for row, (method, solution) in enumerate(solutions):
+        row_axes = axes[row]
+        if not solution.get("success", False):
+            for ax in row_axes:
+                ax.axis("off")
+                ax.text(
+                    0.5,
+                    0.5,
+                    solution.get("message", "USACE solution unavailable."),
+                    ha="center",
+                    va="center",
+                    wrap=True,
+                    transform=ax.transAxes,
+                )
+            continue
+
+        z = solution["depths"]
+        bottom = solution["bottom_depth"]
+        transition = solution["transition_depth"]
+
+        row_axes[0].plot(
+            solution["design_pressure"], z, lw=2.3, label="USACE design"
+        )
+        row_axes[0].plot(
+            solution["net_active"], z, lw=1.5, ls="--", label="Net active"
+        )
+        row_axes[0].plot(
+            solution["net_passive"], z, lw=1.5, ls=":", label="Full net passive"
+        )
+        row_axes[0].axvline(0.0, color="#334155", lw=0.8)
+        row_axes[0].set_xlabel("Pressure (psf)")
+        row_axes[0].set_ylabel("Depth from top (ft)")
+        row_axes[0].set_title(f"{method}: USACE Pressure")
+
+        row_axes[1].plot(solution["shear"], z, lw=2.2, label=method)
+        row_axes[1].axvline(0.0, color="#334155", lw=0.8)
+        row_axes[1].set_xlabel("Shear V (kips/ft)")
+        row_axes[1].set_title(
+            f"Shear |V|max={solution['max_abs_shear']:.2f}"
+        )
+
+        row_axes[2].plot(solution["moment"], z, lw=2.2, label=method)
+        row_axes[2].axvline(0.0, color="#334155", lw=0.8)
+        row_axes[2].set_xlabel("Moment M (kip-ft/ft)")
+        row_axes[2].set_title(
+            f"Moment |M|max={solution['max_abs_moment']:.2f}"
+        )
+
+        row_axes[3].plot(solution["deflection"], z, lw=2.2, label=method)
+        row_axes[3].axvline(0.0, color="#334155", lw=0.8)
+        row_axes[3].set_xlabel("Deflection y (in)")
+        row_axes[3].set_title(
+            f"Approx. Deflection |y|max={solution['max_abs_deflection']:.3f}"
+        )
+
+        for ax in row_axes:
+            ax.axhline(
+                float(passive_start_depth),
+                color="#92400e",
+                lw=1.0,
+                ls="--",
+                label="Excavation / dredge line" if ax is row_axes[0] else None,
+            )
+            ax.axhline(
+                transition,
+                color="#7c3aed",
+                lw=1.1,
+                ls="-.",
+                label="USACE transition" if ax is row_axes[0] else None,
+            )
+            ax.set_ylim(bottom, 0.0)
+            ax.grid(True, alpha=0.3, linestyle="--")
+            ax.legend(fontsize=8, loc="upper right")
+            ax.xaxis.set_label_position("top")
+            ax.xaxis.tick_top()
+            ax.tick_params(
+                axis="x",
+                labeltop=True,
+                labelbottom=False,
+                top=True,
+                bottom=False,
+            )
+            ax.xaxis.labelpad = 8
+            ax.title.set_position((0.5, 1.20))
+
+    fig.suptitle(
+        "USACE EM 1110-2-2504 Cantilever-Wall Equilibrium Results",
+        fontsize=14,
+        fontweight="bold",
+        y=0.995,
+    )
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.96])
+    return fig
+
+
+def usace_summary_df():
+    rows = []
+    for method, solution in [("Rankine", usace_rankine), ("Coulomb", usace_coulomb)]:
+        if not solution.get("success", False):
+            rows.append(
+                {
+                    "Method": method,
+                    "Status": solution.get("message", "No solution"),
+                    "Required penetration d (ft)": "--",
+                    "Design bottom depth (ft)": "--",
+                    "Transition depth from top (ft)": "--",
+                    "z above bottom (ft)": "--",
+                    "Max |V| (kips/ft)": "--",
+                    "Max |M| (kip-ft/ft)": "--",
+                    "Top deflection (in)": "--",
+                    "Max |deflection| (in)": "--",
+                    "Force residual (lb/ft)": "--",
+                    "Moment residual (lb-ft/ft)": "--",
+                }
+            )
+            continue
+        rows.append(
+            {
+                "Method": method,
+                "Status": "Converged",
+                "Required penetration d (ft)": f"{solution['embedment']:.2f}",
+                "Design bottom depth (ft)": f"{solution['bottom_depth']:.2f}",
+                "Transition depth from top (ft)": f"{solution['transition_depth']:.2f}",
+                "z above bottom (ft)": f"{solution['z_above_bottom']:.2f}",
+                "Max |V| (kips/ft)": f"{solution['max_abs_shear']:.2f}",
+                "Max |M| (kip-ft/ft)": f"{solution['max_abs_moment']:.2f}",
+                "Top deflection (in)": f"{solution['top_deflection']:.3f}",
+                "Max |deflection| (in)": f"{solution['max_abs_deflection']:.3f}",
+                "Force residual (lb/ft)": f"{solution['force_residual']:.3f}",
+                "Moment residual (lb-ft/ft)": f"{solution['moment_residual']:.3f}",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def usace_detail_df(solution):
+    if not solution.get("success", False):
+        return pd.DataFrame()
+    idx = np.linspace(
+        0,
+        len(solution["depths"]) - 1,
+        min(60, len(solution["depths"])),
+        dtype=int,
+    )
+    return pd.DataFrame(
+        {
+            "Depth (ft)": np.round(solution["depths"][idx], 3),
+            "Net active pressure (psf)": np.round(solution["net_active"][idx], 2),
+            "Full net passive pressure (psf)": np.round(solution["net_passive"][idx], 2),
+            "USACE design pressure (psf)": np.round(solution["design_pressure"][idx], 2),
+            "Shear (kips/ft)": np.round(solution["shear"][idx], 4),
+            "Moment (kip-ft/ft)": np.round(solution["moment"][idx], 4),
+            "Rotation (rad)": np.round(solution["rotation"][idx], 7),
+            "Deflection (in)": np.round(solution["deflection"][idx], 5),
+        }
+    )
+
+
 def report_table_df():
     idx = np.linspace(0, len(depths) - 1, min(30, len(depths)), dtype=int)
     return pd.DataFrame({
@@ -1241,8 +1966,8 @@ def generate_word_report(template_bytes=None, meta=None):
 
     doc.add_heading("Input Parameters", level=2)
     input_df = pd.DataFrame({
-        "Parameter": ["Wall height H", "Wall inclination alpha", "Backfill slope beta", "Wall friction delta", "Passive pressure start depth", "Water table", "Water unit weight", "Surcharge type", "Young's modulus E", "Moment of inertia I", "Pile tributary width / spacing", "Deflection boundary condition", "Embedment depth", "Point of fixity depth"],
-        "Value": [f"{H:.2f} ft", f"{alpha_deg:.2f} deg", f"{beta_deg:.2f} deg", f"{delta_deg:.2f} deg", f"{passive_start_depth:.2f} ft", f"{water_table:.2f} ft" if include_water else "Not included", f"{gamma_w:.1f} pcf" if include_water else "N/A", surcharge_label, f"{youngs_modulus_ksi:.1f} ksi", f"{moment_of_inertia_in4:.2f} in^4", f"{pile_tributary_width_ft:.2f} ft", deflection_boundary_label, f"{embedment_depth_ft:.2f} ft", f"{point_of_fixity_depth:.2f} ft"],
+        "Parameter": ["Wall height H", "Wall inclination alpha", "Backfill slope beta", "Wall friction delta", "Passive pressure start depth", "Water table", "Water unit weight", "Surcharge type", "Young's modulus E", "Moment of inertia I", "Pile tributary width / spacing", "Deflection boundary condition", "Embedment depth", "Point of fixity depth", "Run USACE analysis", "USACE passive FSp", "USACE maximum trial embedment"],
+        "Value": [f"{H:.2f} ft", f"{alpha_deg:.2f} deg", f"{beta_deg:.2f} deg", f"{delta_deg:.2f} deg", f"{passive_start_depth:.2f} ft", f"{water_table:.2f} ft" if include_water else "Not included", f"{gamma_w:.1f} pcf" if include_water else "N/A", surcharge_label, f"{youngs_modulus_ksi:.1f} ksi", f"{moment_of_inertia_in4:.2f} in^4", f"{pile_tributary_width_ft:.2f} ft", deflection_boundary_label, f"{embedment_depth_ft:.2f} ft", f"{point_of_fixity_depth:.2f} ft", "Yes" if run_usace_analysis else "No", f"{usace_passive_fs:.2f}", f"{usace_max_embedment_ft:.2f} ft"],
     })
     add_df_to_doc(doc, input_df)
 
@@ -1261,6 +1986,7 @@ def generate_word_report(template_bytes=None, meta=None):
         "Passive total pressure is calculated as passive effective soil pressure plus pore-water pressure when total pressure is selected.",
         "Surcharge pressure is calculated separately from earth pressure. FHWA/WALLPRES strip loading, NAVFAC/Boussinesq point loading, and AASHTO 2:1 strip/isolated footing/point-load distribution are included as separate surcharge methods when selected.",
         "Elastic deflection is calculated from curvature M/EI. The moment per foot of wall is multiplied by the entered pile tributary width or spacing and converted to kip-in. Zero rotation and zero deflection are imposed at the selected point of fixity within the embedment, or at the pile toe when the toe-fixed option is selected. Positive deflection is in the active-pressure direction.",
+        "The optional USACE EM 1110-2-2504 cantilever method forms net-active and full-net-passive pressure distributions, reduces passive soil strengths by FSp, and solves simultaneous horizontal-force and moment equilibrium for the required penetration and transition point. The transition is used only as an idealized elastic fixity for the optional deflection diagram.",
     ]
     def add_safe_bullet(document, text):
         # Some company templates do not include Word's built-in "List Bullet" style.
@@ -1285,6 +2011,9 @@ def generate_word_report(template_bytes=None, meta=None):
         figures.append((f"Figure {next_fig_num}: Separate surcharge pressure diagram.", create_surcharge_figure()))
         next_fig_num += 1
     figures.append((f"Figure {next_fig_num}: Net pressure, shear, moment, and elastic deflection diagrams along the pile/wall.", create_net_shear_moment_figure()))
+    next_fig_num += 1
+    if run_usace_analysis:
+        figures.append((f"Figure {next_fig_num}: USACE cantilever equilibrium pressure, shear, moment, and approximate deflection diagrams.", create_usace_cantilever_figure()))
     for caption, fig in figures:
         doc.add_paragraph(caption)
         buf = fig_to_png_bytes(fig)
@@ -1296,10 +2025,13 @@ def generate_word_report(template_bytes=None, meta=None):
     add_df_to_doc(doc, summary_table_df())
     doc.add_paragraph("Table 3: Pressure values at selected depths.")
     add_df_to_doc(doc, report_table_df())
+    if run_usace_analysis:
+        doc.add_paragraph("Table 4: USACE cantilever equilibrium summary.")
+        add_df_to_doc(doc, usace_summary_df())
 
     doc.add_heading("Limitations", level=2)
     doc.add_paragraph(
-        "The results are based on classical earth pressure methods and the input parameters entered by the user. The deflection calculation assumes a linear-elastic Euler-Bernoulli wall with an idealized user-selected point of fixity. The exact fixity location used by proprietary software may differ because it can be determined from its internal passive-resistance procedure. This calculation does not iterate soil pressure with wall movement, include discrete braces or anchors, model nonlinear pile-soil springs, or account for cracking, yielding, shear deformation, construction staging, or second-order effects. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
+        "The results are based on classical earth pressure methods and the input parameters entered by the user. The deflection calculation assumes a linear-elastic Euler-Bernoulli wall with an idealized point of fixity. The USACE transition point is a rotational-stability construct near the zero-displacement point; using it as both zero rotation and zero deflection is an additional approximation for plotting elastic deflection. The USACE solver extends the last entered soil layer below the entered wall bottom when evaluating trial penetrations. This calculation does not iterate soil pressure with wall movement, include discrete braces or anchors, model nonlinear pile-soil springs, or account for cracking, yielding, shear deformation, construction staging, or second-order effects. The calculation is intended for preliminary engineering review and should be checked by the engineer of record before design use."
     )
 
     out = BytesIO()
@@ -1310,7 +2042,7 @@ def generate_word_report(template_bytes=None, meta=None):
 # -----------------------------
 # Results UI
 # -----------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📐 Results & Diagrams", "📊 Comparison Charts", "📋 Formulas & Notes", "🔢 Detailed Tables", "📝 Report"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📐 Results & Diagrams", "📊 Comparison Charts", "📋 Formulas & Notes", "🔢 Detailed Tables", "🏛️ USACE Cantilever", "📝 Report"])
 
 with tab1:
     st.subheader("Input Geometry Based on Current Parameters")
@@ -1542,6 +2274,18 @@ Elastic beam curvature and deflection:
 $$\kappa = \frac{M}{EI}, \qquad \theta = \int \kappa\,dx, \qquad y = \int \theta\,dx$$
 
 For the point-of-fixity option, the boundary conditions are $\theta(z_f)=0$ and $y(z_f)=0$, where $z_f$ is measured from the wall top. The point is selected as a user-entered fraction of the embedment below the excavation/passive-pressure start depth. For the toe-fixed option, $z_f=H$. The moment used for one pile is the moment per foot of wall multiplied by the entered pile tributary width or spacing. Positive deflection is in the active-pressure direction; negative deflection is toward the passive side.
+
+### USACE cantilever-wall equilibrium method
+
+The optional method follows USACE EM 1110-2-2504, Chapter 5. Passive strengths are reduced as:
+
+$$\tan\phi_{eff}=\frac{\tan\phi}{FS_p}, \qquad c_{eff}=\frac{c}{FS_p}$$
+
+The design pressure equals the net-active distribution from the top to the transition point. From the transition to the design bottom, pressure varies linearly to the full net-passive pressure. Required penetration $d$ and the distance $z$ from the design bottom to the transition are solved from:
+
+$$\sum F_H=0, \qquad \sum M=0$$
+
+The manual describes the transition as near the point of zero displacement. In this app, using the transition as both zero rotation and zero deflection for the optional elastic-deflection plot is an additional idealization, not part of the USACE equilibrium equations.
 """)
 
 with tab4:
@@ -1609,6 +2353,98 @@ with tab4:
 
 
 with tab5:
+    st.subheader("USACE EM 1110-2-2504 Cantilever-Wall Method")
+    st.markdown(
+        "The method uses the net-active pressure distribution from the wall top to a transition point. "
+        "Below the transition, the design pressure varies linearly to the full net-passive pressure at "
+        "the design bottom. The solver varies penetration and transition location until both horizontal-force "
+        "and moment equilibrium are satisfied. Passive coefficients remain consistent with the app's "
+        "Kp = 1/Ka convention after strength reduction."
+    )
+    st.caption(
+        f"Passive strength reduction: FSp = {usace_passive_fs:.2f}; "
+        f"maximum trial embedment = {usace_max_embedment_ft:.2f} ft. "
+        "The last entered soil layer is extended for trial depths below the entered wall bottom."
+    )
+
+    usace_summary = usace_summary_df()
+    st.dataframe(usace_summary, use_container_width=True, hide_index=True)
+
+    for method, solution, css_class in [
+        ("Rankine", usace_rankine, "rankine"),
+        ("Coulomb", usace_coulomb, "coulomb"),
+    ]:
+        if solution.get("success", False):
+            entered_embedment = max(float(H) - float(passive_start_depth), 0.0)
+            adequacy_text = (
+                "Entered wall penetration is adequate for this calculated requirement."
+                if entered_embedment + 1.0e-6 >= solution["embedment"]
+                else (
+                    f"Entered penetration is {solution['embedment'] - entered_embedment:.2f} ft "
+                    "less than the calculated USACE requirement."
+                )
+            )
+            st.markdown(
+                f"""
+                <div class="result-card">
+                  <span class="method-badge {css_class}">{method} USACE</span>
+                  <h4>Required penetration d = {solution['embedment']:.2f} ft</h4>
+                  <p style="margin:0;font-size:0.85rem;">
+                    Design bottom = <b>{solution['bottom_depth']:.2f} ft</b> from top ·
+                    Transition = <b>{solution['transition_depth']:.2f} ft</b> from top ·
+                    z above bottom = <b>{solution['z_above_bottom']:.2f} ft</b><br>
+                    {adequacy_text}
+                  </p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.warning(f"{method}: {solution.get('message', 'USACE solution unavailable.')}")
+
+    if run_usace_analysis:
+        fig_usace = create_usace_cantilever_figure()
+        st.pyplot(fig_usace)
+        plt.close(fig_usace)
+        st.caption(
+            "For the USACE pressure diagram, the transition point is solved from force and moment equilibrium. "
+            "For the deflection panel only, that transition is idealized as a point of zero rotation and zero "
+            "deflection so M/EI can be integrated; EM 1110-2-2504 describes the transition as near the point of "
+            "zero displacement and does not by itself define a complete elastic-deformation boundary condition."
+        )
+
+    col_usace_1, col_usace_2, col_usace_3 = st.columns(3)
+    with col_usace_1:
+        st.download_button(
+            "⬇️ Download USACE Summary (CSV)",
+            usace_summary.to_csv(index=False),
+            "usace_cantilever_summary.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+    with col_usace_2:
+        rankine_usace_df = usace_detail_df(usace_rankine)
+        if not rankine_usace_df.empty:
+            st.download_button(
+                "⬇️ Rankine USACE Data (CSV)",
+                rankine_usace_df.to_csv(index=False),
+                "usace_rankine_response.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+    with col_usace_3:
+        coulomb_usace_df = usace_detail_df(usace_coulomb)
+        if not coulomb_usace_df.empty:
+            st.download_button(
+                "⬇️ Coulomb USACE Data (CSV)",
+                coulomb_usace_df.to_csv(index=False),
+                "usace_coulomb_response.csv",
+                "text/csv",
+                use_container_width=True,
+            )
+
+
+with tab6:
     st.subheader("Generate Technical Memorandum Report")
     st.caption("The report uses the TSG technical memo format when a template is uploaded or when 'TSG Technical MEMO 2026.docx' is available beside the app file.")
 
@@ -1655,6 +2491,6 @@ with tab5:
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#64748b;font-size:0.85rem;padding:10px'>
-  🏗️ Lateral Earth Pressure and Elastic Deflection Calculator | English Units | Multi-Layer Soil | Groundwater | Rankine · Coulomb · At-Rest · Separate Surcharge
+  🏗️ Lateral Earth Pressure and Elastic Deflection Calculator | English Units | Multi-Layer Soil | Groundwater | Rankine · Coulomb · At-Rest · Separate Surcharge · USACE Cantilever
 </div>
 """, unsafe_allow_html=True)
